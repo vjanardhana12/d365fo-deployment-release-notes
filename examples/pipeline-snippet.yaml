@@ -1,0 +1,20 @@
+# Example: how to add this reusable release-notes stage to your existing pipeline.
+#
+# Copy this snippet and paste it at the end of your stages: block.
+# Adjust the parameters to match your project.
+
+stages:
+- stage: Build
+  # ... your existing build stage ...
+
+# Add this after your Build stage:
+- template: pipelines/release-notes-stage.yaml
+  parameters:
+    wikiRepoUrl: 'https://yourorg@dev.azure.com/yourorg/YourProject/_git/YourProject.wiki'
+    branchFolder: 'Main-branch'           # or Prod-branch, Hotfix-branch, Release-branch
+    templateFile: 'release-notes-template/main-template.md'
+    packagesConfigPaths: |
+      $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\packages.config
+      $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\SCF\packages.config
+    foundationPackagePattern: 'Smartcore'  # regex for foundation packages (not MS Platform, not ISV)
+    dependsOn: 'Build'

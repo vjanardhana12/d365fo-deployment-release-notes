@@ -1,0 +1,234 @@
+# =============================================================================
+# Reusable release-notes stage for D365 F&O pipelines.
+#
+# Usage in your pipeline:
+#   stages:
+#   - stage: Build
+#     ...
+#   - template: pipelines/release-notes-stage.yaml
+#     parameters:
+#       wikiRepoUrl: 'https://yourorg@dev.azure.com/yourorg/YourProject/_git/YourProject.wiki'
+#       branchFolder: 'Main-branch'
+#       templateFile: 'release notes template/main-template.md'
+#       packagesConfigPaths: |
+#         $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\packages.config
+#         $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\SCF\packages.config
+#       foundationPackagePattern: 'Smartcore'    # regex to identify foundation packages
+# =============================================================================
+
+parameters:
+  - name: wikiRepoUrl
+    type: string
+    displayName: 'Wiki repo URL (project wiki git URL)'
+  - name: branchFolder
+    type: string
+    default: 'Main-branch'
+    displayName: 'Branch sub-folder (Main-branch, Prod-branch, etc.)'
+  - name: templateFile
+    type: string
+    default: 'release-notes-template/main-template.md'
+  - name: packagesConfigPaths
+    type: string
+    default: ''
+    displayName: 'Newline-separated list of packages.config paths'
+  - name: foundationPackagePattern
+    type: string
+    default: ''
+    displayName: 'Regex to identify foundation packages (e.g., Smartcore). Others are ISV.'
+  - name: dependsOn
+    type: string
+    default: 'Build'
+
+stages:
+- stage: ReleaseNotes
+  displayName: 'Release notes'
+  dependsOn: ${{ parameters.dependsOn }}
+  condition: succeededOrFailed()
+  jobs:
+  - job: GenerateReleaseNotes
+    displayName: 'Generate Release Notes'
+    steps:
+    - task: XplatGenerateReleaseNotes@4
+      inputs:
+        outputfile: '$(Build.ArtifactStagingDirectory)/releaseNotes.md'
+        templateLocation: 'File'
+        templatefile: '${{ parameters.templateFile }}'
+        checkStage: true
+        replaceFile: false
+        getParentsAndChildren: true
+        getAllParents: true
+        getIndirectPullRequests: false
+        stopOnError: false
+        considerPartiallySuccessfulReleases: false
+        checkForManuallyLinkedWI: false
+        wiqlFromTarget: 'WorkItems'
+        removeDuplicateWorkItems: true
+
+    - checkout: self
+      fetchDepth: 2
+      persistCredentials: true
+
+    - task: PowerShell@2
+      displayName: 'Enrich release notes (packages + entity changes)'
+      continueOnError: true
+      inputs:
+        targetType: 'inline'
+        script: |
+          $filePath = "$(Build.ArtifactStagingDirectory)/releaseNotes.md"
+          if (-not (Test-Path $filePath)) { Write-Warning "File not found: $filePath"; return }
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          $content = [System.IO.File]::ReadAllText($filePath, $utf8)
+          $sections = @()
+          $foundationPattern = '${{ parameters.foundationPackagePattern }}'
+
+          # --- NuGet / ISV Package Versions ---
+          $pkgPaths = @'
+          ${{ parameters.packagesConfigPaths }}
+          '@ -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          $pkgRows = @()
+          foreach ($pf in $pkgPaths) {
+            if (Test-Path $pf) {
+              [xml]$xml = Get-Content $pf
+              foreach ($p in $xml.packages.package) {
+                $cat = if ($p.id -match '^Microsoft\.Dynamics') { 'Platform' }
+                       elseif ($foundationPattern -and $p.id -match "(?i)$foundationPattern") { 'Foundation' }
+                       else { 'ISV' }
+                $pkgRows += "| $($p.id) | $($p.version) | $cat |"
+              }
+            }
+          }
+
+          # --- Data Entity Changes ---
+          $repoRoot = "$(Build.SourcesDirectory)"
+          Push-Location $repoRoot
+          $entityDiff = git diff HEAD~1 --name-status -- '*/AxDataEntityView/*' '*/AxCompositeDataEntityView/*' '*/AxDataEntityViewExtension/*' 2>$null
+          Pop-Location
+          if ($entityDiff) {
+            $entityRows = @()
+            foreach ($line in $entityDiff) {
+              if ($line -match '^([AMDRC])\t(.+)$') {
+                $changeCode = $Matches[1]; $filePth = $Matches[2]
+                $status = switch ($changeCode) { 'A' {'Added'} 'M' {'Modified'} 'D' {'Deleted'} 'R' {'Renamed'} 'C' {'Copied'} default {$changeCode} }
+                $entityName = [System.IO.Path]::GetFileNameWithoutExtension($filePth)
+                $mdl = '-'; if ($filePth -match 'Metadata\\([^\\]+)\\') { $mdl = $Matches[1] }
+                $isExt = $filePth -match 'Extension'; $type = if ($isExt) { 'Extension' } else { 'Entity' }
+                $fieldDetail = ''
+                if ($changeCode -eq 'M') {
+                  Push-Location $repoRoot
+                  $rawDiff = git diff HEAD~1 -- $filePth 2>$null
+                  Pop-Location
+                  $addedF  = @($rawDiff | Where-Object { $_ -match '^\+.*<Name>(.+?)</Name>' } | ForEach-Object { if ($_ -match '<Name>(.+?)</Name>') { $Matches[1] } }) | Select-Object -Unique
+                  $removedF = @($rawDiff | Where-Object { $_ -match '^\-.*<Name>(.+?)</Name>' } | ForEach-Object { if ($_ -match '<Name>(.+?)</Name>') { $Matches[1] } }) | Select-Object -Unique
+                  $newFields = @($addedF | Where-Object { $_ -notin $removedF })
+                  $delFields = @($removedF | Where-Object { $_ -notin $addedF })
+                  $parts = @()
+                  if ($newFields) { $parts += "+$($newFields -join ', +' )" }
+                  if ($delFields) { $parts += "-$($delFields -join ', -' )" }
+                  if ($parts) { $fieldDetail = $parts -join '; ' }
+                } elseif ($changeCode -eq 'A') {
+                  $fieldDetail = 'New'
+                }
+                $entityRows += "| $entityName | $type | $status | $mdl | $fieldDetail |"
+              }
+            }
+            if ($entityRows) {
+              $entSection  = "# Data Entity Changes`r`n`r`n"
+              $entSection += "> **Action required**: Refresh entity list in Data Management and verify mappings for changed entities.`r`n`r`n"
+              $entSection += "| **Entity** | **Type** | **Change** | **Model** | **Field details** |`r`n"
+              $entSection += "|---|---|---|---|---|`r`n"
+              $entSection += ($entityRows -join "`r`n") + "`r`n"
+              $sections += $entSection
+            }
+          }
+
+          # --- Inject entity changes before Pull Requests ---
+          if ($sections) {
+            $inject = ($sections -join "`r`n") + "`r`n"
+            $prPattern = '(?m)^# Pull Requests'
+            if ($content -match $prPattern) {
+              $content = [regex]::Replace($content, $prPattern, ($inject + '# Pull Requests'))
+            } else {
+              $content += "`r`n" + $inject
+            }
+          }
+          # --- Append Package Versions at the very end ---
+          if ($pkgRows) {
+            $pkgSection  = "`r`n# Package Versions`r`n`r`n"
+            $pkgSection += "| **Package** | **Version** | **Category** |`r`n"
+            $pkgSection += "|---|---|---|`r`n"
+            $pkgSection += ($pkgRows -join "`r`n") + "`r`n"
+            $content += $pkgSection
+          }
+          [System.IO.File]::WriteAllText($filePath, $content, $utf8)
+          Write-Host "Enrichment complete."
+
+    - task: PowerShell@2
+      displayName: 'Clean up release notes (HTML, empty sections)'
+      continueOnError: true
+      inputs:
+        targetType: 'inline'
+        script: |
+          $filePath = "$(Build.ArtifactStagingDirectory)/releaseNotes.md"
+          if (-not (Test-Path $filePath)) { Write-Warning "File not found: $filePath"; return }
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          $content = [System.IO.File]::ReadAllText($filePath, $utf8)
+          Add-Type -AssemblyName System.Web
+          $content = [System.Web.HttpUtility]::HtmlDecode($content)
+          $content = [regex]::Replace($content, '<(?!!--)[^>]*?>', '')
+          $content = [regex]::Replace($content, '(?ms)^# [^\n]+\r?\n\s*\|[^\n]+\|\r?\n\|[-:\s|]+\|\s*(\r?\n)+(?=(# |$))', '')
+          [System.IO.File]::WriteAllText($filePath, $content, $utf8)
+          Write-Host "Cleaned release notes."
+
+    - task: richardfennellBM.BM-VSTS-WIKIUpdater-Tasks.WikiUpdaterTask.WikiUpdaterTask@3
+      displayName: 'Publish release notes to wiki'
+      continueOnError: true
+      inputs:
+        repo: '${{ parameters.wikiRepoUrl }}'
+        branch: 'wikiMaster'
+        filename: 'Deployment-release-notes/${{ parameters.branchFolder }}/Build-$(Build.BuildNumber).md'
+        dataIsFile: true
+        sourceFile: '$(Build.ArtifactStagingDirectory)/releaseNotes.md'
+        message: 'Creating wiki'
+        gitname: 'Pipeline'
+        gitemail: 'pipeline@local'
+        useAgentToken: true
+        injectExtraHeader: false
+
+    - task: PowerShell@2
+      displayName: 'Sort wiki .order (newest build first)'
+      continueOnError: true
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      inputs:
+        targetType: 'inline'
+        script: |
+          $folder  = 'Deployment-release-notes/${{ parameters.branchFolder }}'
+          $wikiUrl = '${{ parameters.wikiRepoUrl }}'
+          $work    = Join-Path $env:AGENT_TEMPDIRECTORY "wiki-order-$([guid]::NewGuid())"
+          git -c http.extraheader="Authorization: Bearer $($env:SYSTEM_ACCESSTOKEN)" -c core.longpaths=true clone --depth 1 --branch wikiMaster $wikiUrl $work
+          if ($LASTEXITCODE -ne 0) { Write-Warning "Wiki clone failed"; return }
+          Push-Location $work
+          git config user.email 'pipeline@local'
+          git config user.name  'Pipeline'
+          $files = Get-ChildItem (Join-Path $work $folder) -Filter 'Build-*.md' -ErrorAction SilentlyContinue
+          if (-not $files) { Pop-Location; Write-Host "No Build-*.md pages yet"; return }
+          $sorted = $files | Sort-Object @{Expression = {
+              $name = $_.BaseName -replace '^Build-',''
+              try { [version]$name } catch { [version]'0.0.0.0' }
+            }; Descending = $true}
+          $orderPath = Join-Path $work "$folder/.order"
+          $names = $sorted | ForEach-Object { $_.BaseName }
+          [System.IO.File]::WriteAllLines($orderPath, $names, (New-Object System.Text.UTF8Encoding($false)))
+          git add "$folder/.order"
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { Pop-Location; Write-Host '.order up-to-date'; return }
+          git commit -m "Sort .order (newest first) for $folder" | Out-Null
+          git -c http.extraheader="Authorization: Bearer $($env:SYSTEM_ACCESSTOKEN)" push origin wikiMaster
+          Pop-Location
+          Write-Host "Updated .order ($($names.Count) builds)."
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/releaseNotes.md'
+        ArtifactName: 'releaseNotes'
+        publishLocation: 'Container'
