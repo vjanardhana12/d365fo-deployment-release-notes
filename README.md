@@ -6,12 +6,14 @@ Automated deployment release notes for **Dynamics 365 Finance & Operations** —
 
 On every CI build, a wiki page is created with:
 
-- **Work items** — User Stories, Tasks, Bugs linked to the build (with clickable ADO links)
-- **Pull Requests** — who raised, source/target branch, who approved
+- **Work items** — User Stories, Document Deliverables, Tasks, Bugs, Configuration Deliverables linked to the build (with clickable ADO links)
+- **Pull Requests** — who raised, source/target branch, who approved (🟢 / ✓)
 - **Data Entity Changes** — new/modified/deleted entities and extensions with field-level detail
 - **Package Versions** — all NuGet packages (Platform, Foundation, ISV) with versions
-- **Environment progress** — colored mermaid flowchart showing deployment status per environment (updated live by the release pipeline)
-- **Empty section cleanup** — sections with no data are automatically removed
+- **Deployment status strip** — compact `[Env1](url) 🟢 → [Env2](url) ⚪ → [Env3](url) ⚪` strip showing live deployment status per environment, updated by the release pipeline
+- **Release link** — once deployed, `⏳ Awaiting deployment` flips to `[Release N](url) 🟢 _Deployed_`
+- **Section-of-record layout** — every page renders the full set of sections (User Stories, Tasks, Bugs, Config Deliverables, Data Migration, Test Notes, Known Issues, Rollback Plan, Notes, Pull Requests) so reviewers always know what to look for; empty sections render a single `_No xxx linked to this build._` placeholder row
+- **Legend** — 🟢 Deployed · 🟠 Partial · 🔴 Failed · ⚪ Pending
 
 ## Prerequisites
 
@@ -77,7 +79,7 @@ stages:
   parameters:
     wikiRepoUrl: 'https://yourorg@dev.azure.com/yourorg/YourProject/_git/YourProject.wiki'
     branchFolder: 'Main-branch'
-    templateFile: 'release-notes-template/main-template.md'
+    templateFile: 'release-notes-template/release-notes-template.md'
     packagesConfigPaths: |
       $(Build.SourcesDirectory)\path\to\packages.config
     foundationPackagePattern: ''  # regex for your foundation packages
@@ -87,7 +89,7 @@ See [examples/pipeline-snippet.yaml](examples/pipeline-snippet.yaml) for a compl
 
 ### Step 5 (optional): Environment URLs
 
-To add clickable environment links below the mermaid diagram, pass `EnvUrlMapJson` to `Update-WikiReleaseNotes.ps1` in your release pipeline:
+To make the strip entries `[Env](url) 🟢` clickable, pass `EnvUrlMapJson` to `Update-WikiReleaseNotes.ps1` in your release pipeline:
 
 ```powershell
 .\Update-WikiReleaseNotes.ps1 `
@@ -99,24 +101,26 @@ To add clickable environment links below the mermaid diagram, pass `EnvUrlMapJso
 ### Step 6 (optional): Release pipeline integration
 
 Add the `Update-WikiReleaseNotes.ps1` script as a task in each release stage to:
-- Update the mermaid diagram with live deployment status
-- Replace "Awaiting deployment" with a link to the release
+- Refresh the deployment-status strip with live status from `RELEASE_RELEASEID`
+- Replace `⏳ Awaiting deployment` with `[Release N](url) 🟢 _Deployed_`
 
 ## File structure
 
 ```
 ├── release-notes-template/
-│   ├── main-template.md          # Handlebars template (standard ADO fields)
-│   └── release-template.md       # Same template for release branches
+│   └── release-notes-template.md   # Single unified Handlebars template
+│                                  # (Commit blockquote conditionally rendered
+│                                  #  on release/prod/hotfix branches; omitted
+│                                  #  on main via `{{#unless (eq ...) }}`)
 ├── pipelines/
-│   ├── release-notes-stage.yaml  # Reusable YAML stage template
+│   ├── release-notes-stage.yaml   # Reusable YAML stage template
 │   └── scripts/
 │       └── Update-WikiReleaseNotes.ps1   # Release pipeline script
 ├── setup/
-│   ├── Setup-WikiStructure.ps1   # One-time wiki folder creation
-│   └── Grant-BuildPermission.ps1 # One-time permission fix
+│   ├── Setup-WikiStructure.ps1    # One-time wiki folder creation
+│   └── Grant-BuildPermission.ps1  # One-time permission fix
 └── examples/
-    ├── pipeline-snippet.yaml     # Copy-paste snippet
+    ├── pipeline-snippet.yaml      # Copy-paste snippet
     └── custom-template-example.md # How to add custom fields
 ```
 
@@ -126,13 +130,26 @@ Add the `Update-WikiReleaseNotes.ps1` script as a task in each release stage to:
 
 The generic template uses only standard ADO fields. To add project-specific fields:
 
-1. Copy `release-notes-template/main-template.md`
+1. Copy `release-notes-template/release-notes-template.md`
 2. Add Handlebars expressions for your custom fields (see [examples/custom-template-example.md](examples/custom-template-example.md))
 3. Common custom fields to add:
    - `Custom.OriginatedFrom` (Bug origin)
    - `Custom.FoundInEnvironment` (where the bug was found)
    - `Custom.ReleaseNote` / `Custom.RootCauseNotes` (release notes text)
    - Custom work item types (Document Deliverable, Configuration Deliverable)
+
+### Single template for all branches
+
+The one template handles all four branches via a single Handlebars conditional:
+
+```handlebars
+{{#unless (eq (replace buildDetails.sourceBranch "refs/heads/" "") "main")}}
+> **Commit** [`{{substring buildDetails.sourceVersion 0 8}}`]({{buildDetails.repository.url}}/commit/{{buildDetails.sourceVersion}})
+{{/unless}}
+```
+
+- On `main` builds the Commit blockquote is omitted (commit isn't meaningful for daily CD).
+- On `release` / `prod` / `hotfix` branches it renders as a callout above the metadata table.
 
 ### Package categories
 
@@ -155,15 +172,15 @@ Build Pipeline                              Release Pipeline
 ─────────────                               ─────────────────
 1. XplatGenerateReleaseNotes                5. Update-WikiReleaseNotes.ps1
    → releaseNotes.md (from ADO WIs)           → Clone wiki
-                                               → Build mermaid from live release API
-2. Enrich (inline PS)                          → Replace "Awaiting deployment"
-   → Package versions from packages.config     → Push updated page
-   → Entity changes from git diff
-                                            6. (Each stage updates the same page
-3. Cleanup (inline PS)                          with fresh env status)
-   → HTML decode + strip tags
-   → Remove empty sections
-
+                                               → Query live release stages via REST
+2. Enrich (inline PS)                          → Build deployment-status strip:
+   → Package versions from packages.config         [Env1](url) 🟢 → [Env2](url) ⚪
+   → Entity changes from git diff              → Flip ⏳ Awaiting →
+                                                   [Release N](url) 🟢 _Deployed_
+3. Cleanup (inline PS)                         → Push updated page
+   → HTML decode + strip raw tags
+   → Keep empty section placeholders         6. (Each stage updates the same page
+                                                  with fresh strip status)
 4. WikiUpdaterTask
    → Push page to project wiki
    → Sort .order (newest first)

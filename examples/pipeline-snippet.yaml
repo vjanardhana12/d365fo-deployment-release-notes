@@ -12,7 +12,7 @@ stages:
   parameters:
     wikiRepoUrl: 'https://yourorg@dev.azure.com/yourorg/YourProject/_git/YourProject.wiki'
     branchFolder: 'Main-branch'           # or Prod-branch, Hotfix-branch, Release-branch
-    templateFile: 'release-notes-template/main-template.md'
+    templateFile: 'release-notes-template/release-notes-template.md'
     packagesConfigPaths: |
       $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\packages.config
       $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\SCF\packages.config

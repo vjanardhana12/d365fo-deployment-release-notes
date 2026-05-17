@@ -5,7 +5,7 @@
 #   - Custom work item types (Document Deliverable, Configuration Deliverable)
 #   - Custom notes fields (ReleaseNote, RootCauseNotes)
 #
-# Copy release-notes-template/main-template.md and add your custom sections.
+# Copy release-notes-template/release-notes-template.md and add your custom sections.
 # Below shows the diff — what to ADD to the generic template.
 
 # ── Bugs section: replace the generic Bugs table with this ────────────────────

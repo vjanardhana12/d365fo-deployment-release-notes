@@ -9,7 +9,7 @@
 #     parameters:
 #       wikiRepoUrl: 'https://yourorg@dev.azure.com/yourorg/YourProject/_git/YourProject.wiki'
 #       branchFolder: 'Main-branch'
-#       templateFile: 'release notes template/main-template.md'
+#       templateFile: 'release-notes-template/release-notes-template.md'
 #       packagesConfigPaths: |
 #         $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\packages.config
 #         $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\SCF\packages.config
@@ -26,7 +26,7 @@ parameters:
     displayName: 'Branch sub-folder (Main-branch, Prod-branch, etc.)'
   - name: templateFile
     type: string
-    default: 'release-notes-template/main-template.md'
+    default: 'release-notes-template/release-notes-template.md'
   - name: packagesConfigPaths
     type: string
     default: ''
@@ -163,21 +163,27 @@ stages:
           Write-Host "Enrichment complete."
 
     - task: PowerShell@2
-      displayName: 'Clean up release notes (HTML, empty sections)'
+      displayName: 'Clean up release notes (HTML decode, strip raw tags)'
       continueOnError: true
       inputs:
         targetType: 'inline'
         script: |
+          # NOTE: This step intentionally keeps empty sections (the template
+          # renders a single static '_No xxx linked to this build._' row per
+          # section when there's no data). Reviewers prefer to see the full
+          # table of contents on every page even when sections are empty.
           $filePath = "$(Build.ArtifactStagingDirectory)/releaseNotes.md"
           if (-not (Test-Path $filePath)) { Write-Warning "File not found: $filePath"; return }
           $utf8 = New-Object System.Text.UTF8Encoding($false)
           $content = [System.IO.File]::ReadAllText($filePath, $utf8)
           Add-Type -AssemblyName System.Web
+          # Decode any HTML entities the template engine introduced.
           $content = [System.Web.HttpUtility]::HtmlDecode($content)
+          # Strip any raw HTML tags that leaked through (keep HTML comments
+          # such as <!-- ENV-PROGRESS-BLOCK --> intact).
           $content = [regex]::Replace($content, '<(?!!--)[^>]*?>', '')
-          $content = [regex]::Replace($content, '(?ms)^# [^\n]+\r?\n\s*\|[^\n]+\|\r?\n\|[-:\s|]+\|\s*(\r?\n)+(?=(# |$))', '')
           [System.IO.File]::WriteAllText($filePath, $content, $utf8)
-          Write-Host "Cleaned release notes."
+          Write-Host "Cleaned release notes (HTML decode + tag strip)."
 
     - task: richardfennellBM.BM-VSTS-WIKIUpdater-Tasks.WikiUpdaterTask.WikiUpdaterTask@3
       displayName: 'Publish release notes to wiki'
