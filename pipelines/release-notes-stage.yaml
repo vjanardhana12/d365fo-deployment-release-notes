@@ -98,45 +98,29 @@ stages:
             }
           }
 
-          # --- Data Entity Changes ---
+          # --- Data Entity Changes (counts only) ---
+          # Field-level detail is intentionally omitted - the metadata table's
+          # "Compare" link gives a full file diff. Surfacing only counts here
+          # keeps the release-notes page readable.
           $repoRoot = "$(Build.SourcesDirectory)"
           Push-Location $repoRoot
-          $entityDiff = git diff HEAD~1 --name-status -- '*/AxDataEntityView/*' '*/AxCompositeDataEntityView/*' '*/AxDataEntityViewExtension/*' 2>$null
+          $entityDiff = git diff HEAD~1 --name-status -- '*/AxDataEntityView/*' '*/AxCompositeDataEntityView/*' '*/AxDataEntityViewExtension/*' '*/AxAggregateDataEntity/*' 2>$null
           Pop-Location
           if ($entityDiff) {
-            $entityRows = @()
+            $added = 0; $modified = 0; $deleted = 0
             foreach ($line in $entityDiff) {
-              if ($line -match '^([AMDRC])\t(.+)$') {
-                $changeCode = $Matches[1]; $filePth = $Matches[2]
-                $status = switch ($changeCode) { 'A' {'Added'} 'M' {'Modified'} 'D' {'Deleted'} 'R' {'Renamed'} 'C' {'Copied'} default {$changeCode} }
-                $entityName = [System.IO.Path]::GetFileNameWithoutExtension($filePth)
-                $mdl = '-'; if ($filePth -match 'Metadata\\([^\\]+)\\') { $mdl = $Matches[1] }
-                $isExt = $filePth -match 'Extension'; $type = if ($isExt) { 'Extension' } else { 'Entity' }
-                $fieldDetail = ''
-                if ($changeCode -eq 'M') {
-                  Push-Location $repoRoot
-                  $rawDiff = git diff HEAD~1 -- $filePth 2>$null
-                  Pop-Location
-                  $addedF  = @($rawDiff | Where-Object { $_ -match '^\+.*<Name>(.+?)</Name>' } | ForEach-Object { if ($_ -match '<Name>(.+?)</Name>') { $Matches[1] } }) | Select-Object -Unique
-                  $removedF = @($rawDiff | Where-Object { $_ -match '^\-.*<Name>(.+?)</Name>' } | ForEach-Object { if ($_ -match '<Name>(.+?)</Name>') { $Matches[1] } }) | Select-Object -Unique
-                  $newFields = @($addedF | Where-Object { $_ -notin $removedF })
-                  $delFields = @($removedF | Where-Object { $_ -notin $addedF })
-                  $parts = @()
-                  if ($newFields) { $parts += "+$($newFields -join ', +' )" }
-                  if ($delFields) { $parts += "-$($delFields -join ', -' )" }
-                  if ($parts) { $fieldDetail = $parts -join '; ' }
-                } elseif ($changeCode -eq 'A') {
-                  $fieldDetail = 'New'
-                }
-                $entityRows += "| $entityName | $type | $status | $mdl | $fieldDetail |"
-              }
+              if     ($line -match '^A\t') { $added++ }
+              elseif ($line -match '^M\t') { $modified++ }
+              elseif ($line -match '^D\t') { $deleted++ }
             }
-            if ($entityRows) {
+            $parts = @()
+            if ($added)    { $parts += "**$added** added" }
+            if ($modified) { $parts += "**$modified** modified" }
+            if ($deleted)  { $parts += "**$deleted** deleted" }
+            if ($parts) {
               $entSection  = "# Data Entity Changes`r`n`r`n"
-              $entSection += "> **Action required**: Refresh entity list in Data Management and verify mappings for changed entities.`r`n`r`n"
-              $entSection += "| **Entity** | **Type** | **Change** | **Model** | **Field details** |`r`n"
-              $entSection += "|---|---|---|---|---|`r`n"
-              $entSection += ($entityRows -join "`r`n") + "`r`n"
+              $entSection += "> Entities changed in this build: " + ($parts -join ', ') + ".`r`n"
+              $entSection += "> Use the **Compare** link in the metadata table for the full file-level diff.`r`n"
               $sections += $entSection
             }
           }

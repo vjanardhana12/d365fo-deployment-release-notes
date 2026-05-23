@@ -4,6 +4,8 @@
 
 **One-click deployment release notes for Dynamics 365 Finance & Operations** — published to your Azure DevOps project wiki on every build, then live-updated by each deployment stage. Zero manual effort, full traceability across DevTest → UAT → PROD.
 
+👉 **See a full sample of what gets published:** [examples/sample-release-notes.md](examples/sample-release-notes.md)
+
 ---
 
 ## What gets published — per build
@@ -45,7 +47,7 @@ Each deployment stage re-runs the script and refreshes the strip with current RE
 - **User Stories / Tasks / Bugs / Document Deliverables / Configuration Deliverables** — tables from ADO work items linked to the build
 - **Bugs** — auto-sorted by Severity then Priority (S1 rows first)
 - **Pull Requests** — who raised, source/target branch, who approved (🟢 / ✓); cherry-picked PRs are re-attributed to the original author
-- **Data Entity Changes** — new/modified/deleted entities with field-level diff
+- **Data Entity Changes** — counts of added / modified / deleted entities (full file-level diff is one click away via the **Compare** cell in the metadata table)
 - **Package Versions** — all NuGet packages (Platform / Foundation / ISV) from `packages.config`
 - **Data Migration · Test Notes · Known Issues · Rollback Plan · Notes** — section-of-record placeholders (always rendered; show `_No xxx linked_` italic line when empty)
 
