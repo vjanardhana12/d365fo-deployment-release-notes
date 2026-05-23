@@ -1,15 +1,13 @@
 ## Build {{buildDetails.buildNumber}} - D365 Finance and Operations
 
-{{#unless (eq (replace buildDetails.sourceBranch "refs/heads/" "") "main")}}
-> **Commit** [`{{substring buildDetails.sourceVersion 0 8}}`]({{buildDetails.repository.url}}/commit/{{buildDetails.sourceVersion}})
-{{/unless}}
-
 | | | | |
 |---|---|---|---|
 | **Release**        | ⏳ _**Awaiting deployment**_                                  | **Build**         | [{{buildDetails.buildNumber}}]({{buildDetails.url}}) |
 | **Prepared for**   | _Your Project Name_                                           | **Prepared by**   | _Your Organization_ |
 | **Branch**         | `{{replace buildDetails.sourceBranch "refs/heads/" ""}}`      | **Repository**    | `{{buildDetails.repository.name}}` |
 | **Build date**     | {{buildDetails.startTime}}                                    | **Triggered by**  | {{buildDetails.requestedFor.displayName}} |
+| **Commit**         | [`{{substring buildDetails.sourceVersion 0 8}}`]({{buildDetails.repository.url}}/commit/{{buildDetails.sourceVersion}}) | **Schedule** | _Pending_ |
+| **Tag**            | _Pending_                                                     | **Compare**       | _Pending_ |
 
 ## Deployment status
 
