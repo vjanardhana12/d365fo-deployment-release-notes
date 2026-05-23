@@ -36,11 +36,13 @@ Tip: open this file as raw markdown to see the source, or open it in a wiki/mark
 ## Post-Deployment Actions
 
 - 🔐 **Security objects changed** — verify role/duty assignments in target environment.
+- � **Data entities changed** — refresh entity list in Data Management > Framework parameters.
 - 🔢 **Number sequences changed** — run the Generate wizard under Organization administration > Number sequences.
 
 **New objects introduced in this build:**
 
 - 🔐 Security: 2 roles, 4 duties, 15 privileges, 7 policies
+- 🗂 Data entities: 2 new data entities
 - 🔢 Number sequences: 1 new reference/scope/group
 - ⏰ Batch jobs: 1 new batch job (schedule under System administration > Inquiries > Batch jobs)
 
