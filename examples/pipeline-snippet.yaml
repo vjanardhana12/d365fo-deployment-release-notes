@@ -15,6 +15,6 @@ stages:
     templateFile: 'release-notes-template/release-notes-template.md'
     packagesConfigPaths: |
       $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\packages.config
-      $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\SCF\packages.config
-    foundationPackagePattern: 'Smartcore'  # regex for foundation packages (not MS Platform, not ISV)
+      $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\SubFolder\packages.config
+    foundationPackagePattern: 'YourFoundationModuleNamePrefix'  # regex for in-house foundation packages (not MS Platform, not 3rd-party ISV)
     dependsOn: 'Build'

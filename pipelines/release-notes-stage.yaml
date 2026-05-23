@@ -12,8 +12,8 @@
 #       templateFile: 'release-notes-template/release-notes-template.md'
 #       packagesConfigPaths: |
 #         $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\packages.config
-#         $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\SCF\packages.config
-#       foundationPackagePattern: 'Smartcore'    # regex to identify foundation packages
+#         $(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\SubFolder\packages.config
+#       foundationPackagePattern: 'YourFoundationModuleNamePrefix'    # regex to identify foundation packages
 # =============================================================================
 
 parameters:
@@ -34,7 +34,7 @@ parameters:
   - name: foundationPackagePattern
     type: string
     default: ''
-    displayName: 'Regex to identify foundation packages (e.g., Smartcore). Others are ISV.'
+    displayName: 'Regex to identify foundation packages (e.g., YourFoundationModuleNamePrefix). Others are ISV.'
   - name: dependsOn
     type: string
     default: 'Build'
@@ -78,7 +78,6 @@ stages:
           if (-not (Test-Path $filePath)) { Write-Warning "File not found: $filePath"; return }
           $utf8 = New-Object System.Text.UTF8Encoding($false)
           $content = [System.IO.File]::ReadAllText($filePath, $utf8)
-          $sections = @()
           $foundationPattern = '${{ parameters.foundationPackagePattern }}'
 
           # --- NuGet / ISV Package Versions ---
@@ -98,43 +97,12 @@ stages:
             }
           }
 
-          # --- Data Entity Changes (counts only) ---
-          # Field-level detail is intentionally omitted - the metadata table's
-          # "Compare" link gives a full file diff. Surfacing only counts here
-          # keeps the release-notes page readable.
-          $repoRoot = "$(Build.SourcesDirectory)"
-          Push-Location $repoRoot
-          $entityDiff = git diff HEAD~1 --name-status -- '*/AxDataEntityView/*' '*/AxCompositeDataEntityView/*' '*/AxDataEntityViewExtension/*' '*/AxAggregateDataEntity/*' 2>$null
-          Pop-Location
-          if ($entityDiff) {
-            $added = 0; $modified = 0; $deleted = 0
-            foreach ($line in $entityDiff) {
-              if     ($line -match '^A\t') { $added++ }
-              elseif ($line -match '^M\t') { $modified++ }
-              elseif ($line -match '^D\t') { $deleted++ }
-            }
-            $parts = @()
-            if ($added)    { $parts += "**$added** added" }
-            if ($modified) { $parts += "**$modified** modified" }
-            if ($deleted)  { $parts += "**$deleted** deleted" }
-            if ($parts) {
-              $entSection  = "# Data Entity Changes`r`n`r`n"
-              $entSection += "> Entities changed in this build: " + ($parts -join ', ') + ".`r`n"
-              $entSection += "> Use the **Compare** link in the metadata table for the full file-level diff.`r`n"
-              $sections += $entSection
-            }
-          }
+          # Data entity counts are already surfaced by Update-WikiReleaseNotes.ps1
+          # in the "Post-Deployment Actions" -> "New objects introduced" block,
+          # plus a "Data entities changed" reminder. The Compare link in the
+          # metadata table covers full file-level detail, so no separate
+          # Data Entity Changes section is emitted here.
 
-          # --- Inject entity changes before Pull Requests ---
-          if ($sections) {
-            $inject = ($sections -join "`r`n") + "`r`n"
-            $prPattern = '(?m)^# Pull Requests'
-            if ($content -match $prPattern) {
-              $content = [regex]::Replace($content, $prPattern, ($inject + '# Pull Requests'))
-            } else {
-              $content += "`r`n" + $inject
-            }
-          }
           # --- Append Package Versions at the very end ---
           if ($pkgRows) {
             $pkgSection  = "`r`n# Package Versions`r`n`r`n"

@@ -116,11 +116,6 @@ _Standard rollback: redeploy the previous build artifact for affected environmen
 
 **Reviewer legend**: 🟢 Approved · ✓ Approved with suggestions
 
-# Data Entity Changes
-
-> Entities changed in this build: **2** added, **1** modified.
-> Use the **Compare** link in the metadata table for the full file-level diff.
-
 # Package Versions
 
 | **Package** | **Version** | **Category** |
@@ -144,5 +139,4 @@ _Standard rollback: redeploy the previous build artifact for affected environmen
 | Post-Deployment Actions | git diff between this build's SHA and previous successful build SHA on the same branch | Counts derived from `Ax*` folder paths; Compare link has the full detail |
 | User Stories / Tasks / Bugs / etc. | ADO work items linked to the build | Bugs auto-sorted by Severity then Priority |
 | Pull Requests | ADO PR REST | Cherry-picked PRs re-attributed to original author; `(EXT)` suffix stripped |
-| Data Entity Changes | `git diff HEAD~1 --name-status` on entity folders | Counts only — Compare link has the file-level diff |
 | Package Versions | `packages.config` (XML parse) | Categorized via `foundationPackagePattern` regex |
