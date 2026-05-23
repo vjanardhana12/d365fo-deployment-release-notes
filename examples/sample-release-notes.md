@@ -36,14 +36,23 @@ Tip: open this file as raw markdown to see the source, or open it in a wiki/mark
 ## Post-Deployment Actions
 
 - 🔐 **Security objects changed** — verify role/duty assignments in target environment.
-- � **Data entities changed** — refresh entity list in Data Management > Framework parameters.
+- 🗂 **Data entities changed** — refresh entity list in Data Management > Framework parameters.
+- 🔁 **Workflows changed** — activate/configure under the relevant module > Setup > Workflows.
 - 🔢 **Number sequences changed** — run the Generate wizard under Organization administration > Number sequences.
+- 🏷 **Financial dimensions changed** — activate under General ledger > Chart of accounts > Dimensions.
+- ⚙ **Configuration keys changed** — review under System administration > Setup > Licensing > License configuration.
+- 📡 **Business events changed** — activate the endpoint under System administration > Setup > Business events.
+- ⏰ **Batch jobs introduced** — schedule under System administration > Inquiries > Batch jobs.
 
 **New objects introduced in this build:**
 
 - 🔐 Security: 2 roles, 4 duties, 15 privileges, 7 policies
 - 🗂 Data entities: 2 new data entities
+- 🔁 Workflows: 1 new workflow type (PurchReqWorkflow)
 - 🔢 Number sequences: 1 new reference/scope/group
+- 🏷 Financial dimensions: 1 new financial dimension
+- ⚙ Configuration keys: 1 new configuration key
+- 📡 Business events: 1 new business event
 - ⏰ Batch jobs: 1 new batch job (schedule under System administration > Inquiries > Batch jobs)
 
 ## User Stories
@@ -56,7 +65,10 @@ Tip: open this file as raw markdown to see the source, or open it in a wiki/mark
 
 ## Document Deliverables
 
-_No document deliverables linked to this build._
+| **ID** | **Title** | **Area** | **Iteration** | **Tags** |
+|--------|-----------|----------|---------------|----------|
+| [81526](https://dev.azure.com/contoso/MyProject/_workitems/edit/81526) | PurchReqWorkflow - Functional Design Document v1.0 | MyProject\Procurement | Sprint 24 | FDD; Procurement |
+| [81732](https://dev.azure.com/contoso/MyProject/_workitems/edit/81732) | Intercompany Sales Number Sequence - Test Plan | MyProject\Sales | Sprint 24 | TestPlan; Sales |
 
 ## Tasks
 
@@ -83,11 +95,16 @@ _No document deliverables linked to this build._
 
 ## Data Migration / Cutover Notes
 
-_Not applicable for this build._
+| **Step** | **Owner** | **When** | **Notes** |
+|----------|-----------|----------|-----------|
+| Run `LedgerJournalImport` to seed account 470100 | Functional Lead | After deploy, before UAT testing | Source file in SharePoint > Cutover > Build-2026.05.23.1 |
+| Refresh Data Management entity list | Admin | First load only | Required because 2 new entities were added |
 
 ## Test Notes
 
-_Smoke tests pending sign-off._
+- Priority Test Items (S1/S2 above) must be signed off before promoting to PreProd.
+- Regression pack: run **Sales > Order-to-cash** and **Procurement > Procure-to-pay** suites.
+- Reviewer: please attach screenshots of the new approval flow to work item [81523](https://dev.azure.com/contoso/MyProject/_workitems/edit/81523).
 
 ## Known Issues / Caveats
 
@@ -97,7 +114,10 @@ _Smoke tests pending sign-off._
 
 ## Rollback Plan
 
-_Standard rollback: redeploy the previous build artifact for affected environment(s)._
+1. Stop incoming integrations to the affected environment.
+2. Redeploy previous build artifact `2026.05.22.1` via Asset Library > Software deployable package.
+3. Restore database snapshot taken at `2026-05-23T00:00:00Z` only if entity schema rollback is required.
+4. Notify stakeholders via the Teams channel **D365 Deployments**.
 
 ## Notes
 
