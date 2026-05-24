@@ -795,6 +795,34 @@ try {
     Write-Host "WARN: Could not collapse empty-state tables: $($_.Exception.Message)."
 }
 
+# --- Drop trailing placeholder row from tables that DO have real data --------
+# The Notes template always emits a `| - | - | _No X..._ | - | - |` trailing
+# row regardless of whether real rows above it matched the Handlebars filter.
+# If at least one real row exists, drop the placeholder row so the table is
+# clean. We do this generically per `## ` section block: any row whose only
+# non-`-` cell is an italic `_..._` placeholder is removed when a real data
+# row (heuristic: contains a markdown link `| [`) precedes it in the same block.
+try {
+    $content = [System.IO.File]::ReadAllText($filePath, $utf8)
+    $placeholderRx = [regex]'(?m)^\|(?:\s-\s\|)+\s_[^_]+_\s\|[^\r\n]*\r?\n'
+    $blocks = [regex]::Split($content, '(?m)(?=^## )')
+    $changed = $false
+    for ($i = 0; $i -lt $blocks.Count; $i++) {
+        $b = $blocks[$i]
+        if ($b -match '(?m)^\|\s*\[' -and $b -match $placeholderRx) {
+            $blocks[$i] = $placeholderRx.Replace($b, '', 1)
+            $changed = $true
+        }
+    }
+    if ($changed) {
+        $content = ($blocks -join '')
+        [System.IO.File]::WriteAllText($filePath, $content, $utf8)
+        Write-Host "Stripped trailing placeholder row(s) from non-empty tables."
+    }
+} catch {
+    Write-Host "WARN: Could not strip trailing placeholder rows: $($_.Exception.Message)."
+}
+
 # --- Attribute cherry-picked PRs to the original author ----------------------
 try {
     $content = [System.IO.File]::ReadAllText($filePath, $utf8)
@@ -928,6 +956,12 @@ if ($CreateTag -and (Should-CreateTag -Branch $SourceBranchName -StageName $env:
 Write-Host "##vso[task.setvariable variable=wikiFilePath]$filePath"
 Write-Host "##vso[task.setvariable variable=wikiPagePath]$relPath"
 Write-Host "=== Update-WikiReleaseNotes.ps1 complete ==="
+
+# Reset $LASTEXITCODE so a non-zero from a swallowed git operation (e.g. the
+# tag-creation try/catch above) does not bubble up and fail this pipeline task.
+# Any genuine fatal would have thrown and never reached this line.
+$global:LASTEXITCODE = 0
+exit 0
 <#
 .SYNOPSIS
     Updates the release-notes wiki page for a deployment stage.

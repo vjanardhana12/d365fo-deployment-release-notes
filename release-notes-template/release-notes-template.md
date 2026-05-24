@@ -7,7 +7,11 @@
 | **Branch**         | `{{replace buildDetails.sourceBranch "refs/heads/" ""}}`      | **Repository**    | `{{buildDetails.repository.name}}` |
 | **Build date**     | {{buildDetails.startTime}}                                    | **Triggered by**  | {{buildDetails.requestedFor.displayName}} |
 | **Commit**         | [`{{substring buildDetails.sourceVersion 0 8}}`]({{buildDetails.repository.url}}/commit/{{buildDetails.sourceVersion}}) |                   |             |
+{{#if (eq (replace buildDetails.sourceBranch "refs/heads/" "") "main")}}
+|                    |                                                               | **Compare**       | _Pending_ |
+{{else}}
 | **Tag**            | _Pending_                                                     | **Compare**       | _Pending_ |
+{{/if}}
 
 ## Deployment status
 
