@@ -14,7 +14,7 @@ Tip: open this file as raw markdown to see the source, or open it in a wiki/mark
 | **Prepared for**   | Contoso Retail D365 F&O                                       | **Prepared by**   | Contoso Engineering |
 | **Branch**         | `main`                                                        | **Repository**    | `MyApp` |
 | **Build date**     | 2026-05-23T00:15:42Z                                          | **Triggered by**  | Jane Doe |
-| **Commit**         | [`d3208bdb`](https://dev.azure.com/contoso/MyProject/_git/MyApp/commit/d3208bdb8fddd86e8a6d51e2e4daf4a205ae2c3a) | **Schedule** | Daily 00:15 CEST |
+| **Commit**         | [`d3208bdb`](https://dev.azure.com/contoso/MyProject/_git/MyApp/commit/d3208bdb8fddd86e8a6d51e2e4daf4a205ae2c3a) | | |
 | **Tag**            | [`uat-2026.05.23.1`](https://dev.azure.com/contoso/MyProject/_git/MyApp?version=GTuat-2026.05.23.1) | **Compare**       | [`2026.05.22.1` -> `2026.05.23.1`](https://dev.azure.com/contoso/MyProject/_git/MyApp/branchCompare?baseVersion=GC3844d040&targetVersion=GCd3208bdb&_a=files) |
 
 ## Deployment status
@@ -155,7 +155,7 @@ Tip: open this file as raw markdown to see the source, or open it in a wiki/mark
 
 | Section | Source | Notes |
 |---|---|---|
-| Metadata table | Build env vars + script REST calls | `Tag`, `Compare`, `Schedule` cells filled live by `Update-WikiReleaseNotes.ps1` |
+| Metadata table | Build env vars + script REST calls | `Tag` and `Compare` cells filled live by `Update-WikiReleaseNotes.ps1` |
 | Deployment status strip | Release REST API | Refreshed by every stage; click links open D365 environments |
 | Priority Test Items | Parsed from Bugs table | Auto-callout for S1/S2 bug fixes |
 | Post-Deployment Actions | git diff between this build's SHA and previous successful build SHA on the same branch | Counts derived from `Ax*` folder paths; Compare link has the full detail |

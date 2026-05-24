@@ -15,7 +15,7 @@
          the existing sentinel-bounded block (subsequent runs) with a fresh
          compact deployment-status strip built from the LIVE release stages
          queried via Azure DevOps REST API.
-      4. Inject Tag / Compare / Schedule cells into the metadata table.
+      4. Inject Tag / Compare cells into the metadata table.
       5. Inject a "Post-Deployment Actions" section listing manual-action
          categories (security, data entities, workflows, number sequences,
          financial dimensions, configuration keys, business events, batch jobs).
@@ -336,7 +336,8 @@ function Build-EnvBlock {
         [string]$ReleaseId,
         [string]$Token,
         [string]$CurrentStageEnv,
-        [string]$CurrentStageOverride
+        [string]$CurrentStageOverride,
+        [string]$PriorContent = ''
     )
 
     $excludedNamePatterns = @('Upload to Asset Library')
@@ -366,11 +367,34 @@ function Build-EnvBlock {
         -not ($excludedNamePatterns | Where-Object { $n -like "*$_*" })
     })
 
-    $parts = foreach ($e in $envs) {
+    $parts = @(foreach ($e in $envs) {
         $status = if ($CurrentStageOverride -and $e.name -eq $CurrentStageOverride) { 'succeeded' } else { $e.status }
         $icon   = Get-StageIcon $status
         $envUrl = Get-EnvUrl $e.name
         if ($envUrl) { "[$($e.name)]($envUrl) $icon" } else { "$($e.name) $icon" }
+    })
+
+    # --- Monotonic-forward: never downgrade a previously-completed stage ----
+    # ADO release REST snapshots can lag by several seconds across rapid stage
+    # transitions, so a stage that just finished may briefly show as
+    # `inProgress` / `notStarted` when a sibling stage's post-deploy task fires
+    # moments later, causing the icon to flicker done -> pending. Carry forward
+    # any prior done/partial/failed if the new render says pending.
+    if ($PriorContent) {
+        $sentinelRx = "(?s)$([regex]::Escape($BlockStart)).*?$([regex]::Escape($BlockEnd))"
+        if ($PriorContent -match $sentinelRx) {
+            $oldStrip = $Matches[0]
+            $iconAlt  = (@($IconDone, $IconPartial, $IconFailed) | ForEach-Object { [regex]::Escape($_) }) -join '|'
+            for ($i = 0; $i -lt $envs.Count; $i++) {
+                $nm    = [regex]::Escape($envs[$i].name)
+                $rxOld = "\[$nm\][^\r\n]*?\s+($iconAlt)"
+                if (($oldStrip -match $rxOld) -and ($parts[$i] -like "*$IconPending*")) {
+                    $oldIcon   = $Matches[1]
+                    $parts[$i] = $parts[$i] -replace [regex]::Escape($IconPending), $oldIcon
+                    Write-Host "Carry-forward: kept '$($envs[$i].name)' as $oldIcon (prior render was definite; current REST snapshot is stale)."
+                }
+            }
+        }
     }
 
     $strip  = ($parts -join " $Arrow ")
@@ -385,19 +409,19 @@ if ($CreateTag -and (Should-CreateTag -Branch $SourceBranchName -StageName $env:
     $plannedTag = Get-TagName -Branch $SourceBranchName -BuildNumber $BuildNumber -Token $Token -RepoApiBase $repoApiBase -RepoUriBase $repoUriBase
 }
 
+$utf8    = New-Object System.Text.UTF8Encoding($false)
+$content = if (Test-Path $filePath) { [System.IO.File]::ReadAllText($filePath, $utf8) } else { '' }
+
 $blockContent, $allEnvs = Build-EnvBlock `
     -CollectionUri        $collectionUri `
     -ProjectName          $projectName `
     -ReleaseId            $env:RELEASE_RELEASEID `
     -Token                $Token `
     -CurrentStageEnv      $Environment `
-    -CurrentStageOverride $env:RELEASE_ENVIRONMENTNAME
+    -CurrentStageOverride $env:RELEASE_ENVIRONMENTNAME `
+    -PriorContent         $content
 
 $newBlock = @($BlockStart, $blockContent, $BlockEnd) -join "`r`n"
-
-# --- Apply to file: prefer sentinel pair, fall back to placeholder -----------
-$utf8    = New-Object System.Text.UTF8Encoding($false)
-$content = [System.IO.File]::ReadAllText($filePath, $utf8)
 
 $sentinelPattern = "(?s)$([regex]::Escape($BlockStart)).*?$([regex]::Escape($BlockEnd))"
 
@@ -484,56 +508,6 @@ try {
     }
 } catch {
     Write-Host "WARN: Could not inject compare link: $($_.Exception.Message)."
-}
-
-# --- Inject Schedule cell (pulls scheduled trigger from build definition) ----
-try {
-    $buildDefId = if ($env:BUILD_DEFINITIONID) { $env:BUILD_DEFINITIONID } else { $env:SYSTEM_DEFINITIONID }
-    if ($buildDefId) {
-        $apiBase = "$projectBaseUri/_apis/build/definitions"
-        $def = Invoke-RestMethod -Uri ("{0}/{1}?api-version=7.0" -f $apiBase, $buildDefId) -Headers @{ Authorization = "Bearer $Token" }
-        $sched = $def.triggers | Where-Object { $_.triggerType -eq 'schedule' } | Select-Object -First 1
-        $scheduleCell = $null
-        if ($sched -and $sched.schedules) {
-            $s = $sched.schedules | Select-Object -First 1
-            $tzSource = [System.TimeZoneInfo]::FindSystemTimeZoneById($s.timeZoneId)
-            $tzLocal  = [System.TimeZoneInfo]::Local
-            $localDt  = New-Object DateTime ((Get-Date).Year, (Get-Date).Month, (Get-Date).Day, [int]$s.startHours, [int]$s.startMinutes, 0, ([DateTimeKind]::Unspecified))
-            $utcDt    = [System.TimeZoneInfo]::ConvertTimeToUtc($localDt, $tzSource)
-            $cetDt    = [System.TimeZoneInfo]::ConvertTimeFromUtc($utcDt, $tzLocal)
-            $abbr     = if ($tzLocal.IsDaylightSavingTime($cetDt)) { $tzLocal.DaylightName } else { $tzLocal.StandardName }
-            $timeStr  = '{0:HH:mm} {1}' -f $cetDt, ($abbr -replace '\s', '')
-            $daysLabel = 'Daily'
-            if ($s.daysToBuild -is [string]) {
-                if ($s.daysToBuild -eq 'all') { $daysLabel = 'Daily' }
-                else { $daysLabel = $s.daysToBuild }
-            } elseif ($s.daysToBuild -is [int]) {
-                $dayNames = @('Mon','Tue','Wed','Thu','Fri','Sat','Sun')
-                $masks    = @(1,2,4,8,16,32,64)
-                $sel = @()
-                for ($i = 0; $i -lt 7; $i++) { if (($s.daysToBuild -band $masks[$i]) -ne 0) { $sel += $dayNames[$i] } }
-                if ($sel.Count -eq 7) { $daysLabel = 'Daily' }
-                elseif ($sel.Count -eq 5 -and ($sel -join ',') -eq 'Mon,Tue,Wed,Thu,Fri') { $daysLabel = 'Mon-Fri' }
-                else { $daysLabel = $sel -join ', ' }
-            }
-            $scheduleCell = "$daysLabel $timeStr"
-        }
-        if (-not $scheduleCell) { $scheduleCell = '_Manual / CI only_' }
-
-        $content = [System.IO.File]::ReadAllText($filePath, $utf8)
-        $newContent = [regex]::Replace(
-            $content,
-            '(\|\s\*\*Schedule\*\*\s+\|\s)(?:_Pending_|[^|]+?)(\s\|)',
-            { param($m) $m.Groups[1].Value + $scheduleCell + $m.Groups[2].Value },
-            1
-        )
-        if ($newContent -ne $content) {
-            [System.IO.File]::WriteAllText($filePath, $newContent, $utf8)
-            Write-Host ("Injected schedule '{0}' into metadata table." -f $scheduleCell)
-        }
-    }
-} catch {
-    Write-Host "WARN: Could not inject schedule: $($_.Exception.Message)."
 }
 
 # --- Inject Post-Deployment Actions section ---------------------------------
@@ -672,10 +646,26 @@ try {
                 Write-Host "Injected Post-Deployment Actions section ($($reminders.Count) reminder(s), $($newLines.Count) new-object line(s))."
             }
         } else {
-            Write-Host "No relevant post-deployment changes detected."
+            # No qualifying changes detected, but still emit the heading so the
+            # page shape is consistent with every other section.
+            $content = [System.IO.File]::ReadAllText($filePath, $utf8)
+            if ($content -notmatch '(?m)^## Post-Deployment Actions' -and $content -match '(?m)^## User Stories') {
+                $section = "`r`n## Post-Deployment Actions`r`n`r`n_No post-deployment actions required for this build._`r`n`r`n"
+                $content = $content -replace '(?m)(^## User Stories)', ($section.Replace('$','$$') + '$1')
+                [System.IO.File]::WriteAllText($filePath, $content, $utf8)
+                Write-Host "Injected empty Post-Deployment Actions section (no relevant changes)."
+            }
         }
     } else {
-        Write-Host "Skipping Post-Deployment Actions (no prev SHA or RepoName)."
+        # No prev SHA -> still emit the heading with a placeholder so the page
+        # shape is consistent across builds.
+        $content = [System.IO.File]::ReadAllText($filePath, $utf8)
+        if ($content -notmatch '(?m)^## Post-Deployment Actions' -and $content -match '(?m)^## User Stories') {
+            $section = "`r`n## Post-Deployment Actions`r`n`r`n_No post-deployment actions required for this build._`r`n`r`n"
+            $content = $content -replace '(?m)(^## User Stories)', ($section.Replace('$','$$') + '$1')
+            [System.IO.File]::WriteAllText($filePath, $content, $utf8)
+            Write-Host "Injected empty Post-Deployment Actions section (no prev SHA or RepoName)."
+        }
     }
 } catch {
     Write-Host "WARN: Could not generate Post-Deployment Actions: $($_.Exception.Message)."
@@ -739,7 +729,18 @@ try {
             [System.IO.File]::WriteAllText($filePath, $content, $utf8)
             Write-Host "Injected Priority Test Items callout ($($priorityBugs.Count) S1/S2 bug(s))."
         } else {
-            Write-Host "No S1/S2 bugs in this build - skipping Priority Test Items."
+            # No S1/S2 bugs, but still emit the heading so the page shape is
+            # consistent and deployers can see 'no high-priority items' at a glance.
+            $section = "`r`n## Priority Test Items`r`n`r`n_No S1/S2 priority bugs in this build._`r`n`r`n"
+            if ($content -match '(?m)^## Post-Deployment Actions') {
+                $content = $content -replace '(?m)(^## Post-Deployment Actions)', ($section.Replace('$','$$') + '$1')
+            } elseif ($content -match '(?m)^## User Stories') {
+                $content = $content -replace '(?m)(^## User Stories)', ($section.Replace('$','$$') + '$1')
+            } else {
+                $content = $content + $section
+            }
+            [System.IO.File]::WriteAllText($filePath, $content, $utf8)
+            Write-Host "Injected empty Priority Test Items section (no S1/S2 bugs)."
         }
     }
 } catch {

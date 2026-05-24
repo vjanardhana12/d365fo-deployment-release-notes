@@ -20,7 +20,6 @@ Every build creates one wiki page (`Build-<number>.md`) under `Deployment-releas
 | **Branch / Repository** | Source ref + repo name |
 | **Triggered by** | Person who triggered the build |
 | **Commit** | 8-char SHA linked to the commit diff |
-| **Schedule** | `Daily 00:15 CET` (auto-pulled from pipeline schedule trigger) |
 | **Tag** | `uat-<build>` (release) / `v1.2.0` (prod, SemVer) auto-injected when tag is created |
 | **Compare** | `<prevBuild> → <thisBuild>` link to ADO branch-compare across builds |
 
@@ -221,7 +220,7 @@ Build pipeline (per commit)                Classic Release (per stage, every env
    → releaseNotes.md (work items + PRs)      → Clone wiki repo
                                               → Query LIVE release stages via REST
 2. Enrich (inline PS)                         → Refresh deployment-status strip
-   → packages.config → Package table          → Inject Tag / Compare / Schedule cells
+   → packages.config → Package table          → Inject Tag / Compare cells
                                               → Inject Post-Deployment Actions
                                               → Inject Priority Test Items callout
 3. Clean up (inline PS)                       → Sort Bugs by Severity / Priority
