@@ -889,8 +889,6 @@ try {
         param($m)
         $prId = $m.Groups[2].Value
         $raisedBy = $m.Groups[3].Value.Trim()
-        # Normalize for comparison (strip "(EXT)" suffix that PR JSON sometimes carries)
-        $raisedByNorm = ($raisedBy -replace '\s*\(EXT\)\s*$', '').Trim()
         try {
             $commits = Invoke-RestMethod -Uri "$repoApi/pullRequests/$prId/commits?api-version=7.0" -Headers $hdrs -ErrorAction Stop
             $origAuthor = $null
@@ -903,13 +901,13 @@ try {
                     } catch { }
                 }
             }
-            # Strategy 2: fallback -- commit's preserved author differs from PR creator
+            # Strategy 2: fallback -- commit's preserved author differs from PR creator.
+            # Both names come from ADO REST and include the "(EXT)" suffix uniformly,
+            # so direct string comparison is reliable -- no normalization needed.
             if (-not $origAuthor) {
                 foreach ($c in $commits.value) {
                     $authorName = $c.author.name
-                    if (-not $authorName) { continue }
-                    $authorNorm = ($authorName -replace '\s*\(EXT\)\s*$', '').Trim()
-                    if ($authorNorm -and $authorNorm -ne $raisedByNorm) { $origAuthor = $authorName; break }
+                    if ($authorName -and $authorName -ne $raisedBy) { $origAuthor = $authorName; break }
                 }
             }
             if ($origAuthor -and $origAuthor -ne $raisedBy) {
@@ -929,23 +927,12 @@ try {
     Write-Host "WARN: Could not re-attribute cherry-picked PRs: $($_.Exception.Message)."
 }
 
-# --- Strip "(EXT)" suffix from author/reviewer cells -------------------------
-# ADO display names include " (EXT)" for external (vendor) accounts. Strip the
-# suffix everywhere in the rendered page so the displayed names match what the
-# commit author field carries (which never has the suffix). This keeps the
-# Raised by / Approved by / Triggered by cells visually consistent regardless of
-# whether the name came from the PR JSON, the commit author, or a re-attribution.
-try {
-    $content = [System.IO.File]::ReadAllText($filePath, $utf8)
-    $new = $content -replace '\s*\(EXT\)', ''
-    if ($new -ne $content) {
-        $count = ([regex]'\(EXT\)').Matches($content).Count
-        [System.IO.File]::WriteAllText($filePath, $new, $utf8)
-        Write-Host "Stripped $count '(EXT)' suffix(es) for consistent display."
-    }
-} catch {
-    Write-Host "WARN: Could not strip (EXT) suffixes: $($_.Exception.Message)."
-}
+# NOTE: We intentionally do NOT strip the " (EXT)" suffix from author/reviewer
+# cells. ADO carries the suffix for external (vendor) accounts uniformly across
+# both PR JSON and git commit metadata, so keeping it everywhere is consistent.
+# Earlier we stripped it for cosmetic reasons, but the strip ran AFTER cherry-pick
+# re-attribution, which produced inconsistent rows when manual edits or downstream
+# tooling re-introduced the suffix. Keeping the raw display name avoids that drift.
 
 # --- Replace pending-release placeholder with live release link --------------
 # Use [char]0x23F3 escape (HOURGLASS, U+23F3) so the matcher is byte-for-byte
