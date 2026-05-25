@@ -816,56 +816,14 @@ try {
     Write-Host "WARN: Could not sort Bugs table: $($_.Exception.Message)."
 }
 
-# --- Collapse empty-state tables to single italic line -----------------------
-# Pattern: header row + separator row + a single placeholder row
-#   `| - | _No X linked..._ | - | ... |`
-# becomes a single `_No X linked..._` line. Trims 3 fat rows per empty section.
+# --- Collapse empty-state tables + strip trailing placeholders ---------------
+# Delegated to Trim-EmptyReleaseNoteTables.ps1 (single source of truth shared
+# with the CI build-task cleanup step). Idempotent: safe to run twice.
 try {
+    & (Join-Path $PSScriptRoot 'Trim-EmptyReleaseNoteTables.ps1') -Path $filePath
     $content = [System.IO.File]::ReadAllText($filePath, $utf8)
-    # Matches header + separator + a placeholder row with N leading "-" cells before
-    # the italic placeholder cell, and any number of trailing cells (e.g. the Notes
-    # table has 2 "-" cells before `_No release notes..._` and 2 "-" cells after).
-    $emptyRx = [regex]'(?ms)^\|\s\*\*[^\r\n]+\|\s*\r?\n\|[-\s|]+\|\s*\r?\n\|(?:\s-\s\|)+\s_([^_]+)_\s\|(?:[^\r\n|]*\|)*\s*\r?\n'
-    $new = $emptyRx.Replace($content, { param($m) "_" + $m.Groups[1].Value + "_`r`n" })
-    if ($new -ne $content) {
-        $trimmed = ($content -split "`n").Count - ($new -split "`n").Count
-        [System.IO.File]::WriteAllText($filePath, $new, $utf8)
-        $content = $new
-        Write-Host "Collapsed $trimmed empty-state table line(s) to italic lines."
-    }
 } catch {
-    Write-Host "WARN: Could not collapse empty-state tables: $($_.Exception.Message)."
-}
-
-# --- Drop trailing placeholder row from tables that DO have real data --------
-# The Notes template always emits a `| - | - | _No X..._ | - | - |` trailing
-# row regardless of whether real rows above it matched the Handlebars filter.
-# If at least one real row exists, drop the placeholder row so the table is
-# clean. We do this generically: any data table row whose only non-`-` cell is
-# an italic `_...._` placeholder is removed when another data row precedes it.
-try {
-    $content = [System.IO.File]::ReadAllText($filePath, $utf8)
-    # Match: a data row (starts with `| [` indicating a markdown link) followed
-    # eventually by a placeholder row in the same table block (no blank line and
-    # no `## ` heading between them).
-    $placeholderRx = [regex]'(?m)^\|(?:\s-\s\|)+\s_[^_]+_\s\|[^\r\n]*\r?\n'
-    $blocks = [regex]::Split($content, '(?m)(?=^## )')
-    $changed = $false
-    for ($i = 0; $i -lt $blocks.Count; $i++) {
-        $b = $blocks[$i]
-        # A data row is a table row containing a markdown link (heuristic: `| [`).
-        if ($b -match '(?m)^\|\s*\[' -and $b -match $placeholderRx) {
-            $blocks[$i] = $placeholderRx.Replace($b, '', 1)
-            $changed = $true
-        }
-    }
-    if ($changed) {
-        $content = ($blocks -join '')
-        [System.IO.File]::WriteAllText($filePath, $content, $utf8)
-        Write-Host "Stripped trailing placeholder row(s) from non-empty tables."
-    }
-} catch {
-    Write-Host "WARN: Could not strip trailing placeholder rows: $($_.Exception.Message)."
+    Write-Host "WARN: Could not trim empty release-note tables: $($_.Exception.Message)."
 }
 
 # --- Attribute cherry-picked PRs to the original author ----------------------
