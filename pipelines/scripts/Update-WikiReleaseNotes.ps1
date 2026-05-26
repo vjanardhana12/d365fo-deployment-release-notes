@@ -125,6 +125,17 @@ $BlockEnd    = '<!-- ENV-PROGRESS-END -->'
 $Placeholder = '<!-- ENV-PROGRESS-BLOCK -->'
 
 # Environment name -> D365 URL slug
+#
+# URL resolution order (per env, looked up by name in Get-EnvUrl below):
+#   1. ADO variable group `LCSEnvironmentsURL` (linked to this release definition).
+#      Variables are exposed as env vars matching their group name (lowercase by
+#      convention), with a FULL URL value, e.g.
+#        custtest    = https://cbhub-custtest.sandbox.operations.eu.dynamics.com/
+#        regression  = https://cbhub-regression.sandbox.operations.eu.dynamics.com/
+#      Adding a new LCS env is therefore a Library-only change (no code edit).
+#   2. Hardcoded $EnvUrlMap fallback below -- kept so existing/legacy stages keep
+#      rendering correctly if the variable group is unavailable (e.g. running the
+#      script locally for diagnostics, or a stage runs before the group is linked).
 $script:EnvUrlMap = @{
     'DEV'         = 'cbhub-devtest'
     'DEVTEST'     = 'cbhub-devtest'
@@ -148,6 +159,19 @@ $script:EnvUrlBase = 'sandbox.operations.eu.dynamics.com'
 
 function Get-EnvUrl {
     param([string]$EnvName)
+    if (-not $EnvName) { return $null }
+    # 1. Variable group: var names match common env keys (lowercase preferred).
+    #    Try a few common spellings so renames in the release stage don't break URLs.
+    $candidates = @(
+        $EnvName.ToLower(),
+        $EnvName.ToLower() -replace '[^a-z0-9]', '',  # e.g. "Sit-E2E" -> "site2e"
+        $EnvName.ToUpper()
+    ) | Sort-Object -Unique
+    foreach ($key in $candidates) {
+        $val = [Environment]::GetEnvironmentVariable($key)
+        if ($val -and $val -match '^https?://') { return ($val.TrimEnd('/') + '/') }
+    }
+    # 2. Hardcoded fallback (slug + shared base domain).
     $slug = $script:EnvUrlMap[$EnvName.ToUpper()]
     if ($slug) { return "https://$slug.$($script:EnvUrlBase)/" }
     return $null
@@ -847,6 +871,13 @@ try {
         param($m)
         $prId = $m.Groups[2].Value
         $raisedBy = $m.Groups[3].Value.Trim()
+        # IDEMPOTENT: if this cell was already wrapped by a previous post-deploy
+        # run (every stage post-deploy invokes this script), do nothing. Without
+        # this guard, names like "Vinod Kumar K J" (git author.name) vs
+        # "Vinod Kumar KJ (EXT)" (PR creator displayName) compare unequal and
+        # the cell gets wrapped again on every run, producing
+        # `_(cherry-picked by _(cherry-picked by _(cherry-picked by ...)_)_)_`.
+        if ($raisedBy -match '_\(cherry-picked by ') { return $m.Value }
         try {
             $commits = Invoke-RestMethod -Uri "$repoApi/pullRequests/$prId/commits?api-version=7.0" -Headers $hdrs -ErrorAction Stop
             $origAuthor = $null
@@ -860,12 +891,17 @@ try {
                 }
             }
             # Strategy 2: fallback -- commit's preserved author differs from PR creator.
-            # Both names come from ADO REST and include the "(EXT)" suffix uniformly,
-            # so direct string comparison is reliable -- no normalization needed.
+            # Use loose comparison (collapse whitespace + strip "(EXT)") so the same
+            # human is not treated as two different people just because ADO renders
+            # "Vinod Kumar KJ (EXT)" while git records "Vinod Kumar K J". This avoids
+            # spurious cherry-pick wrappers on plain (non-cherry-picked) PRs.
             if (-not $origAuthor) {
+                $raisedByKey = ((($raisedBy -replace '\s*\(EXT\)\s*$', '') -replace '\s+', '')).ToLower()
                 foreach ($c in $commits.value) {
                     $authorName = $c.author.name
-                    if ($authorName -and $authorName -ne $raisedBy) { $origAuthor = $authorName; break }
+                    if (-not $authorName) { continue }
+                    $authorKey = ((($authorName -replace '\s*\(EXT\)\s*$', '') -replace '\s+', '')).ToLower()
+                    if ($authorKey -and $authorKey -ne $raisedByKey) { $origAuthor = $authorName; break }
                 }
             }
             if ($origAuthor -and $origAuthor -ne $raisedBy) {
