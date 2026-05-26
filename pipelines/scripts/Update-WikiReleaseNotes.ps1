@@ -125,6 +125,17 @@ $BlockEnd    = '<!-- ENV-PROGRESS-END -->'
 $Placeholder = '<!-- ENV-PROGRESS-BLOCK -->'
 
 # Environment name -> D365 URL slug
+#
+# URL resolution order (per env, looked up by name in Get-EnvUrl below):
+#   1. ADO variable group `LCSEnvironmentsURL` (linked to this release definition).
+#      Variables are exposed as env vars matching their group name (lowercase by
+#      convention), with a FULL URL value, e.g.
+#        custtest    = https://cbhub-custtest.sandbox.operations.eu.dynamics.com/
+#        regression  = https://cbhub-regression.sandbox.operations.eu.dynamics.com/
+#      Adding a new LCS env is therefore a Library-only change (no code edit).
+#   2. Hardcoded $EnvUrlMap fallback below -- kept so existing/legacy stages keep
+#      rendering correctly if the variable group is unavailable (e.g. running the
+#      script locally for diagnostics, or a stage runs before the group is linked).
 $script:EnvUrlMap = @{
     'DEV'         = 'cbhub-devtest'
     'DEVTEST'     = 'cbhub-devtest'
@@ -148,6 +159,19 @@ $script:EnvUrlBase = 'sandbox.operations.eu.dynamics.com'
 
 function Get-EnvUrl {
     param([string]$EnvName)
+    if (-not $EnvName) { return $null }
+    # 1. Variable group: var names match common env keys (lowercase preferred).
+    #    Try a few common spellings so renames in the release stage don't break URLs.
+    $candidates = @(
+        $EnvName.ToLower(),
+        $EnvName.ToLower() -replace '[^a-z0-9]', '',  # e.g. "Sit-E2E" -> "site2e"
+        $EnvName.ToUpper()
+    ) | Sort-Object -Unique
+    foreach ($key in $candidates) {
+        $val = [Environment]::GetEnvironmentVariable($key)
+        if ($val -and $val -match '^https?://') { return ($val.TrimEnd('/') + '/') }
+    }
+    # 2. Hardcoded fallback (slug + shared base domain).
     $slug = $script:EnvUrlMap[$EnvName.ToUpper()]
     if ($slug) { return "https://$slug.$($script:EnvUrlBase)/" }
     return $null
@@ -831,8 +855,42 @@ try {
 #      differs from the PR's "Raised by" name. `git cherry-pick` (with or
 #      without -x) and ADO's UI cherry-pick BOTH preserve the original author,
 #      so this catches the common case where -x was not used.
+#   3. Last-resort: ADO-UI cherry-pick creates a NEW commit authored by the
+#      person who clicked cherry-pick (so Strategies 1 and 2 fail), but the
+#      source branch name follows the pattern `<original-branch>-on-<env>`
+#      (e.g. `sec/securityroles-on-release`). Strip the `-on-{main|release|
+#      prod|hotfix}` suffix, find the original completed PR with that source
+#      branch, and use its creator as the true author.
 try {
     $content = [System.IO.File]::ReadAllText($filePath, $utf8)
+    # First: collapse any legacy multi-nested wrappers
+    # `A _(cherry-picked by A _(cherry-picked by B)_)_` -> `A _(cherry-picked by B)_`
+    # produced by older runs before the idempotency guard was added.
+    $collapseRx = [regex]'_\(cherry-picked by [^_|]+?_\(cherry-picked by '
+    while ($content -match $collapseRx) {
+        $content = $collapseRx.Replace($content, '_(cherry-picked by ', 1)
+        # Drop one trailing `)_` for each collapsed layer (matched count is opaque here,
+        # so handle in a follow-up pass that trims duplicate trailing markers).
+    }
+    # Trim repeated trailing `)_)_` markers down to a single `)_`
+    $content = [regex]::Replace($content, '(_\(cherry-picked by [^_|]+?)\)_(?:\)_)+(\s*\|)', '$1)_$2')
+    # Unwrap self-wraps: `A _(cherry-picked by A')_` where A and A' are the
+    # same person (e.g. "Vinod Kumar K J" vs "Vinod Kumar KJ (EXT)"). Compare
+    # using the same loose key as Strategy 2 -- strip whitespace + " (EXT)".
+    $selfWrapRx = [regex]'([^|]+?) _\(cherry-picked by ([^_|]+?)\)_(\s*\|)'
+    $content = $selfWrapRx.Replace($content, {
+        param($m)
+        $outer = $m.Groups[1].Value.Trim()
+        $inner = $m.Groups[2].Value.Trim()
+        $outerKey = ((($outer -replace '\s*\(EXT\)\s*$','') -replace '\s+','')).ToLower()
+        $innerKey = ((($inner -replace '\s*\(EXT\)\s*$','') -replace '\s+','')).ToLower()
+        if ($outerKey -eq $innerKey) {
+            # Prefer the "(EXT)" form (PR creator displayName) so output matches ADO's UI
+            $kept = if ($inner -match '\(EXT\)') { $inner } elseif ($outer -match '\(EXT\)') { $outer } else { $inner }
+            return $kept + $m.Groups[3].Value
+        }
+        return $m.Value
+    })
     $repoApi = "https://dev.azure.com/carlsberggroup/$($env:SYSTEM_TEAMPROJECT)/_apis/git/repositories/1760-Smartcore-HUB"
     $hdrs = @{ Authorization = "Bearer $Token"; Accept = 'application/json' }
     # Match PR rows: | [!12345](url) | title | RaisedBy | source | target | ...
@@ -842,6 +900,13 @@ try {
         param($m)
         $prId = $m.Groups[2].Value
         $raisedBy = $m.Groups[3].Value.Trim()
+        # IDEMPOTENT: if this cell was already wrapped by a previous post-deploy
+        # run (every stage post-deploy invokes this script), do nothing. Without
+        # this guard, names like "Vinod Kumar K J" (git author.name) vs
+        # "Vinod Kumar KJ (EXT)" (PR creator displayName) compare unequal and
+        # the cell gets wrapped again on every run, producing
+        # `_(cherry-picked by _(cherry-picked by _(cherry-picked by ...)_)_)_`.
+        if ($raisedBy -match '_\(cherry-picked by ') { return $m.Value }
         try {
             $commits = Invoke-RestMethod -Uri "$repoApi/pullRequests/$prId/commits?api-version=7.0" -Headers $hdrs -ErrorAction Stop
             $origAuthor = $null
@@ -855,13 +920,34 @@ try {
                 }
             }
             # Strategy 2: fallback -- commit's preserved author differs from PR creator.
-            # Both names come from ADO REST and include the "(EXT)" suffix uniformly,
-            # so direct string comparison is reliable -- no normalization needed.
+            # Use loose comparison (collapse whitespace + strip "(EXT)") so the same
+            # human is not treated as two different people just because ADO renders
+            # "Vinod Kumar KJ (EXT)" while git records "Vinod Kumar K J". This avoids
+            # spurious cherry-pick wrappers on plain (non-cherry-picked) PRs.
             if (-not $origAuthor) {
+                $raisedByKey = ((($raisedBy -replace '\s*\(EXT\)\s*$', '') -replace '\s+', '')).ToLower()
                 foreach ($c in $commits.value) {
                     $authorName = $c.author.name
-                    if ($authorName -and $authorName -ne $raisedBy) { $origAuthor = $authorName; break }
+                    if (-not $authorName) { continue }
+                    $authorKey = ((($authorName -replace '\s*\(EXT\)\s*$', '') -replace '\s+', '')).ToLower()
+                    if ($authorKey -and $authorKey -ne $raisedByKey) { $origAuthor = $authorName; break }
                 }
+            }
+            # Strategy 3: ADO-UI cherry-pick. Detect `<branch>-on-{env}` source
+            # branch and look up the original PR's creator.
+            if (-not $origAuthor) {
+                try {
+                    $prDetail = Invoke-RestMethod -Uri "$repoApi/pullRequests/$prId`?api-version=7.0" -Headers $hdrs -ErrorAction Stop
+                    $srcBranch = $prDetail.sourceRefName -replace '^refs/heads/',''
+                    if ($srcBranch -match '^(.+)-on-(main|release|prod|hotfix)$') {
+                        $origBranch = "refs/heads/$($matches[1])"
+                        $searchUri  = "$repoApi/pullrequests?searchCriteria.sourceRefName=$([uri]::EscapeDataString($origBranch))&searchCriteria.status=completed&`$top=1&api-version=7.0"
+                        $origPr     = Invoke-RestMethod -Uri $searchUri -Headers $hdrs -ErrorAction Stop
+                        if ($origPr.value -and $origPr.value[0].createdBy.displayName) {
+                            $origAuthor = $origPr.value[0].createdBy.displayName
+                        }
+                    }
+                } catch { }
             }
             if ($origAuthor -and $origAuthor -ne $raisedBy) {
                 $script:swapped++
