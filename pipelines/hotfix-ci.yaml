@@ -1,0 +1,479 @@
+# HOTFIX pipeline for X++ builds
+# Triggers on commits to short-lived 'hotfix/*' branches cut from 'prod'.
+# Produces a deployable package tagged with HOTFIX_CBHuB and publishes release notes
+# to wiki under MS/HUB-Releases/Hotfix-branch.
+
+# Build name: date first (sortable, matches packages.config version) + branch name suffix
+# (folder Hotfix-branch/ identifies pipeline type; branch suffix identifies which hotfix).
+name: $(Date:yyyy.MM.dd)$(Rev:.r)_$(Build.SourceBranchName)
+trigger:
+  branches:
+    include:
+      - hotfix/*
+  paths:
+    include:
+      - src/*
+
+pool:
+  name: 'Azure Pipelines'
+  vmImage: 'windows-latest'
+  demands:
+    - msbuild
+    - visualstudio
+
+variables:
+- group: 'LCSEnvironments'
+- group: 'AutoPackageUpdater-Config'
+- name: App1Package
+  value: 'Microsoft.Dynamics.AX.Application1.DevALM.BuildXpp'
+- name: App2Package
+  value: 'Microsoft.Dynamics.AX.Application2.DevALM.BuildXpp'
+- name: AppSuitePackage
+  value: 'Microsoft.Dynamics.AX.ApplicationSuite.DevALM.BuildXpp'
+- name: PlatPackage
+  value: 'Microsoft.Dynamics.AX.Platform.DevALM.BuildXpp'
+- name: ToolsPackage
+  value: 'Microsoft.Dynamics.AX.Platform.CompilerPackage'
+- name: MetadataPath
+  value: '$(Build.SourcesDirectory)\src\xpp\metadata'
+- name: NugetConfigsPath
+  value: '$(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild'
+- name: NugetsPath
+  value: '$(Pipeline.Workspace)\NuGets'
+- name: CarlsbergSmartcoreFoundation-HUBPROD
+  value: 'CarlsbergSmartcoreFoundation-HUBPROD'
+- name: d365foadmintoolkit
+  value: 'd365foadmintoolkit'
+- name: AMCBanking
+  value: 'amcbanking'
+- name: FTS-BGLocalization
+  value: 'fts-bglocalization'
+- name: Lasernet
+  value: 'lasernet'
+- name: BE-Terna
+  value: 'be-terna'
+- name: Docentric
+  value: 'docentric'
+- name: packagePrefix
+  value: 'HOTFIX_CBHuB'
+- name: EnableAutoUpdate
+  value: $(PKG_EnableAutoUpdate)
+- name: PackageUpdateTargetBranch
+  # Hotfix branches are cut from prod; auto-PR back to prod so the package bump
+  # is captured alongside the hotfix when it merges back.
+  value: 'prod'
+- name: PackageUpdateWorkItemId
+  value: $(PKG_WorkItemId)
+- name: AutoCompletePR
+  value: $(PKG_AutoCompletePR)
+
+stages:
+- stage: Build
+  jobs:
+  - job: BuildJob
+    steps:
+    - checkout: self
+      persistCredentials: true
+
+    - task: PowerShell@2
+      displayName: 'Run package update workflow'
+      condition: and(succeeded(), eq(variables['EnableAutoUpdate'], 'true'))
+      continueOnError: true
+      inputs:
+        filePath: '$(Build.SourcesDirectory)\pipelines\scripts\Invoke-PackageUpdateWorkflow.ps1'
+        arguments: '-TargetBranch "$(PackageUpdateTargetBranch)" -WorkItemId "$(PackageUpdateWorkItemId)" -AutoApproveAndCompletePR "$(AutoCompletePR)" -LogMode TableOnly -SummaryOutputPath "$(Build.ArtifactStagingDirectory)\package-version-summary.md"'
+        pwsh: true
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+    - task: NuGetCommand@2
+      displayName: 'NuGet Custom Install Packages'
+      inputs:
+        command: custom
+        arguments: 'install -Noninteractive $(NugetConfigsPath)\packages.config -ConfigFile $(NugetConfigsPath)\nuget.config -Verbosity Detailed -ExcludeVersion -OutputDirectory "$(NugetsPath)"'
+
+    - task: NuGetCommand@2
+      displayName: 'NuGet Custom Install Packages from 2011-Smartcore-Foundation'
+      inputs:
+        command: custom
+        arguments: 'install -Noninteractive $(NugetConfigsPath)\SCF\packages.config -ConfigFile $(NugetConfigsPath)\SCF\nuget.config -Verbosity Detailed -ExcludeVersion -OutputDirectory "$(NugetsPath)"'
+
+    - task: PowerShell@2
+      displayName: 'Derive Model Version (strip prefix/branch from BuildNumber)'
+      inputs:
+        targetType: 'inline'
+        script: |
+          $bn = "$(Build.BuildNumber)"
+          # Keep digits and dots only, collapse repeats, trim
+          $clean = ($bn -replace '[^0-9.]','') -replace '\.+','.'
+          $clean = $clean.Trim('.')
+          $parts = @($clean.Split('.') | Where-Object { $_ -ne '' })
+          $isValid = ($parts.Count -eq 4) -and ($parts | ForEach-Object { $_ -match '^[0-9]+$' } | Where-Object { -not $_ } | Measure-Object).Count -eq 0
+          if (-not $isValid) {
+            $datePart = (Get-Date -Format 'yyyy.MM.dd')
+            $modelVersion = "$datePart.$env:BUILD_BUILDID"
+            Write-Host "BuildNumber '$bn' could not be parsed as #.#.#.# - falling back to '$modelVersion'"
+          } else {
+            $modelVersion = $parts -join '.'
+            Write-Host "BuildNumber '$bn' -> ModelVersion '$modelVersion'"
+          }
+          Write-Host "##vso[task.setvariable variable=ModelVersionNumber]$modelVersion"
+
+    - task: XppUpdateModelVersion@0
+      displayName: 'Update Model Version'
+      inputs:
+        XppSourcePath: '$(MetadataPath)'
+        VersionNumber: '$(ModelVersionNumber)'
+
+    - task: VSBuild@1
+      displayName: 'Build Solution'
+      inputs:
+        solution: '$(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\*.sln'
+        vsVersion: '16.0'
+        msbuildArgs: '/p:BuildTasksDirectory="$(NugetsPath)\$(ToolsPackage)\DevAlm" /p:MetadataDirectory="$(MetadataPath)" /p:FrameworkDirectory="$(NuGetsPath)\$(ToolsPackage)" /p:ReferenceFolder="$(NuGetsPath)\$(PlatPackage)\ref\net40;$(NuGetsPath)\$(CarlsbergSmartcoreFoundation-HUBPROD)\ref;$(NuGetsPath)\$(d365foadmintoolkit)\ref;$(NuGetsPath)\$(AMCBanking)\ref;$(NuGetsPath)\$(FTS-BGLocalization)\ref;$(NuGetsPath)\$(Docentric)\ref;$(NuGetsPath)\$(Lasernet)\ref;$(NuGetsPath)\$(BE-Terna)\ref;$(NuGetsPath)\$(App1Package)\ref\net40;$(NuGetsPath)\$(App2Package)\ref\net40;$(NuGetsPath)\$(AppSuitePackage)\ref\net40;$(MetadataPath);$(Build.BinariesDirectory)" /p:ReferencePath="$(NuGetsPath)\$(ToolsPackage)" /p:OutputDirectory="$(Build.BinariesDirectory)"'
+
+    - task: CopyFiles@2
+      displayName: 'Copy X++ compile log files to: $(Build.ArtifactStagingDirectory)\Logs'
+      inputs:
+        SourceFolder: '$(Build.SourcesDirectory)'
+        Contents: |
+          **\Dynamics.AX.*.xppc.*
+          **\Dynamics.AX.*.xppbp.*
+          **\Dynamics.AX.*.labelc.*
+          **\Dynamics.AX.*.reportsc.*
+        TargetFolder: '$(build.ArtifactStagingDirectory)\Logs'
+      condition: succeededOrFailed()
+
+    - task: NuGetToolInstaller@0
+      displayName: 'Use NuGet 3.3.0'
+      inputs:
+        versionSpec: 3.3.0
+
+    - task: PowerShell@2
+      displayName: "Move CarlsbergSmartcoreFoundation"
+      inputs:
+        targetType: 'inline'
+        script: Move-Item -Path $(NuGetsPath)\$(CarlsbergSmartcoreFoundation-HUBPROD)\ref\* -Destination $(Build.BinariesDirectory) -Force
+
+    - task: PowerShell@2
+      displayName: "Move d365foadmintoolkit"
+      inputs:
+        targetType: 'inline'
+        script: Move-Item -Path $(NuGetsPath)\$(d365foadmintoolkit)\ref\* -Destination $(Build.BinariesDirectory) -Force
+
+    - task: PowerShell@2
+      displayName: "Move AMCBanking"
+      inputs:
+        targetType: 'inline'
+        script: Move-Item -Path $(NuGetsPath)\$(AMCBanking)\ref\* -Destination $(Build.BinariesDirectory) -Force
+
+    - task: PowerShell@2
+      displayName: "Move Docentric"
+      inputs:
+        targetType: 'inline'
+        script: Move-Item -Path $(NuGetsPath)\$(Docentric)\ref\* -Destination $(Build.BinariesDirectory) -Force
+
+    - task: PowerShell@2
+      displayName: "Move FTS-BGLocalization"
+      inputs:
+        targetType: 'inline'
+        script: Move-Item -Path $(NuGetsPath)\$(FTS-BGLocalization)\ref\* -Destination $(Build.BinariesDirectory) -Force
+
+    - task: PowerShell@2
+      displayName: "Move Lasernet"
+      inputs:
+        targetType: 'inline'
+        script: Move-Item -Path $(NuGetsPath)\$(Lasernet)\ref\* -Destination $(Build.BinariesDirectory) -Force
+
+    - task: PowerShell@2
+      displayName: "Move BE-Terna"
+      inputs:
+        targetType: 'inline'
+        script: Move-Item -Path $(NuGetsPath)\$(BE-Terna)\ref\* -Destination $(Build.BinariesDirectory) -Force
+
+    - task: XppCreatePackage@0
+      displayName: 'Create Deployable Package'
+      inputs:
+        XppToolsPath: '$(NuGetsPath)\$(ToolsPackage)'
+
+    - task: XppAddLicenseToPackage@0
+      displayName: 'Add Licenses to Deployable Package'
+      inputs:
+        LicenseFilePaths: '$(Build.SourcesDirectory)\src\licences\*.txt'
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Artifact: drop'
+      inputs:
+        PathtoPublish: '$(build.artifactstagingdirectory)'
+      condition: succeededOrFailed()
+
+- stage: ReleaseNotes
+  displayName: 'Release notes'
+  jobs:
+  - job: GenerateReleaseNotes
+    displayName: "Generate Release Notes"
+    steps:
+    - checkout: self
+      fetchDepth: 2
+      persistCredentials: true
+
+    - task: XplatGenerateReleaseNotes@4
+      continueOnError: true
+      inputs:
+        outputfile: '$(Build.ArtifactStagingDirectory)/releaseNotes.md'
+        templateLocation: 'File'
+        templatefile: 'release notes template/release-notes-template.md'
+        checkStage: true
+        replaceFile: false
+        getParentsAndChildren: true
+        getAllParents: true
+        getIndirectPullRequests: false
+        stopOnError: false
+        considerPartiallySuccessfulReleases: false
+        checkForManuallyLinkedWI: false
+        wiqlFromTarget: 'WorkItems'
+        removeDuplicateWorkItems: true
+
+    - task: PowerShell@2
+      displayName: 'Enrich release notes (packages + entity changes)'
+      continueOnError: true
+      inputs:
+        targetType: 'inline'
+        script: |
+          $filePath = "$(Build.ArtifactStagingDirectory)/releaseNotes.md"
+          if (-not (Test-Path $filePath)) { Write-Warning "File not found: $filePath"; return }
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          $content = [System.IO.File]::ReadAllText($filePath, $utf8)
+          # --- Convert buildDetails.startTime (UTC) -> CET/CEST -------------
+          try {
+            $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById('Central European Standard Time')
+            $content = [regex]::Replace($content, '[A-Za-z]{3} [A-Za-z]{3} \d{1,2} \d{4} \d{2}:\d{2}:\d{2} GMT\+0000(?: \(Coordinated Universal Time\))?', {
+              param($m)
+              try {
+                $utc = [datetime]::ParseExact(($m.Value -replace ' GMT\+0000.*$',''),'ddd MMM d yyyy HH:mm:ss',[System.Globalization.CultureInfo]::InvariantCulture,[System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal)
+                $local = [System.TimeZoneInfo]::ConvertTimeFromUtc($utc, $tz)
+                $abbr  = if ($tz.IsDaylightSavingTime($local)) { 'CEST' } else { 'CET' }
+                $local.ToString('ddd dd MMM yyyy HH:mm') + " $abbr"
+              } catch { $m.Value }
+            }, 1)
+          } catch { Write-Host "CET conversion skipped: $($_.Exception.Message)" }
+
+          # --- Filter Configuration Deliverables: keep only CDs linked to a Document Deliverable in scope ---
+          # XplatGenerateReleaseNotes (getAllParents=true) sweeps in unrelated CDs that just happen to share a Feature
+          # parent with a deployed item. Carlsberg rule: a CD is only relevant if it is directly linked
+          # (Related / Child / Parent) to a DD that itself made it into this build. Code Extensions / Tasks / Bugs
+          # carry their DD via parent traversal already, so the rendered "## Document Deliverables" section is the
+          # authoritative in-scope DD list. Trim the CD table against it.
+          try {
+            $ddIds = @()
+            if ($content -match '(?ms)^## Document Deliverables\s*\r?\n.*?(?=\r?\n## |\z)') {
+              $ddSection = $Matches[0]
+              $ddIds = @([regex]::Matches($ddSection, '\|\s*\[(\d+)\]\(') | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique)
+            }
+            if ($ddIds.Count -gt 0 -and $content -match '(?ms)(^## Configuration Deliverables\s*\r?\n.*?)(?=\r?\n## |\z)') {
+              $cdSection = $Matches[1]
+              $orgUri  = "$env:SYSTEM_COLLECTIONURI".TrimEnd('/')
+              $project = $env:SYSTEM_TEAMPROJECT
+              $hdr     = @{ Authorization = "Bearer $env:SYSTEM_ACCESSTOKEN" }
+              $lines   = $cdSection -split "\r?\n"
+              $kept    = @()
+              $removed = 0
+              foreach ($ln in $lines) {
+                if ($ln -match '^\|\s*\[(\d+)\]\(') {
+                  $cdId   = [int]$Matches[1]
+                  $linked = $false
+                  try {
+                    $uri = "$orgUri/$project/_apis/wit/workitems/$cdId" + '?$expand=relations&api-version=7.1-preview.3'
+                    $wi  = Invoke-RestMethod -Uri $uri -Headers $hdr -Method GET -ErrorAction Stop
+                    if ($wi.relations) {
+                      foreach ($r in $wi.relations) {
+                        if ($r.url -match '/workItems/(\d+)$' -and ($ddIds -contains [int]$Matches[1])) { $linked = $true; break }
+                      }
+                    }
+                  } catch { Write-Host "CD $cdId relations lookup failed: $($_.Exception.Message)" }
+                  if ($linked) { $kept += $ln } else { $removed++ }
+                } elseif ($ln -match '^\|\s+-\s+\|') {
+                  # drop existing placeholder row; we'll add it back if no data rows survive
+                } else {
+                  $kept += $ln
+                }
+              }
+              $dataRows = @($kept | Where-Object { $_ -match '^\|\s*\[\d+\]\(' })
+              if ($dataRows.Count -eq 0) {
+                $final = @(); $inserted = $false
+                foreach ($k in $kept) {
+                  $final += $k
+                  if (-not $inserted -and $k -match '^\|[\s\-:|]+\|\s*$') {
+                    $final += '| - | _No configuration deliverables linked to a document deliverable in this build._ | - | - |'
+                    $inserted = $true
+                  }
+                }
+                $kept = $final
+              }
+              $newCdSection = ($kept -join "`r`n")
+              $content = $content.Replace($cdSection, $newCdSection)
+              Write-Host "CD filter: kept $($dataRows.Count), removed $removed (DDs in scope: $($ddIds.Count))."
+            } elseif ($ddIds.Count -eq 0) {
+              Write-Host "CD filter: no Document Deliverables in scope; CD section left unchanged."
+            }
+          } catch { Write-Host "CD filter skipped: $($_.Exception.Message)" }
+
+          # --- NuGet / ISV Package Versions ---
+          $pkgFiles = @(
+            "$(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\packages.config",
+            "$(Build.SourcesDirectory)\src\xpp\xppBuild\AzureBuild\SCF\packages.config"
+          )
+          $pkgItems = @()
+          foreach ($pf in $pkgFiles) {
+            if (Test-Path $pf) {
+              [xml]$xml = Get-Content $pf
+              foreach ($p in $xml.packages.package) {
+                $cat = if ($p.id -match '^Microsoft\.Dynamics') { 'Platform' }
+                       elseif ($p.id -match '(?i)Smartcore') { 'Foundation' }
+                       else { 'ISV' }
+                $sortKey = switch ($cat) { 'Foundation' {1} 'ISV' {2} 'Platform' {3} default {9} }
+                $pkgItems += [pscustomobject]@{ Id=$p.id; Version=$p.version; Category=$cat; SortKey=$sortKey }
+              }
+            }
+          }
+          $pkgRows = $pkgItems | Sort-Object SortKey, @{Expression={$_.Id.ToLowerInvariant()}} | ForEach-Object { "| $($_.Id) | $($_.Version) | $($_.Category) |" }
+          # --- Append Package Versions at the very end (MS internal) ---
+          if ($pkgRows) {
+            $pkgSection  = "`r`n## Package Versions _(MS internal)_`r`n`r`n"
+            $pkgSection += "| **Package** | **Version** | **Category** |`r`n"
+            $pkgSection += "|---|---|---|`r`n"
+            $pkgSection += ($pkgRows -join "`r`n") + "`r`n"
+            $content += $pkgSection
+          }
+          [System.IO.File]::WriteAllText($filePath, $content, $utf8)
+          if ($pkgRows) {
+            Write-Host "Enriched release notes (packages: $($pkgRows.Count))."
+          } else {
+            Write-Host "No enrichment data found (no entity changes, no packages.config)."
+          }
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+    - task: PowerShell@2
+      displayName: 'Add cross-repo linked changes (work items with PRs in other repos)'
+      continueOnError: true
+      inputs:
+        filePath: '$(Build.SourcesDirectory)\pipelines\scripts\Add-CrossRepoLinks.ps1'
+        arguments: '-ReleaseNotesPath "$(Build.ArtifactStagingDirectory)/releaseNotes.md" -OrgUrl "$(System.CollectionUri)" -Project "$(System.TeamProject)" -CurrentRepoName "$(Build.Repository.Name)" -DefinitionId $(System.DefinitionId) -CurrentBuildId $(Build.BuildId) -AccessToken "$(System.AccessToken)"'
+        pwsh: true
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+    - task: PowerShell@2
+      displayName: 'Clean up release notes (HTML decode, PR titles)'
+      continueOnError: true
+      inputs:
+        targetType: 'inline'
+        script: |
+          $filePath = "$(Build.ArtifactStagingDirectory)/releaseNotes.md"
+          if (-not (Test-Path $filePath)) { Write-Warning "File not found: $filePath"; return }
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          $content = [System.IO.File]::ReadAllText($filePath, $utf8)
+          Add-Type -AssemblyName System.Web
+          $content = [System.Web.HttpUtility]::HtmlDecode($content)
+          # Strip HTML tags BUT preserve markdown comments like <!-- ENV-PROGRESS-BLOCK -->
+          $content = [regex]::Replace($content, '<(?!(!--|/?sub\b|br\s*/?>))[^>]*?>', '')
+          # Shorten any 40-char commit SHA inside [`<sha>`](.../commit/<sha>) to first 8 chars (link target preserved).
+          $content = [regex]::Replace($content, '\[`([a-f0-9]{40})`\](\([^)]*?/commit/[a-f0-9]{40}[^)]*\))', { param($m) "[``$($m.Groups[1].Value.Substring(0,8))``]$($m.Groups[2].Value)" })
+          # Templates include explicit "| - | _No xxx linked to this build._ | - | - |"
+          # placeholders so every section renders even when empty. But when the section
+          # also has real data rows, the placeholder is incorrect and confusing — remove it.
+          $lines = $content -split "`r?`n"
+          $out = New-Object System.Collections.Generic.List[string]
+          $sectionLines = New-Object System.Collections.Generic.List[string]
+          $flush = {
+            if ($sectionLines.Count -eq 0) { return }
+            $hasPlaceholder = $false
+            $hasRealData = $false
+            foreach ($l in $sectionLines) {
+              if ($l -match '^\| - \| _No ') { $hasPlaceholder = $true; continue }
+              if ($l -match '^\|' -and $l -notmatch '^\|---' -and $l -notmatch '^\|\s*\*\*') { $hasRealData = $true }
+            }
+            if ($hasPlaceholder -and $hasRealData) {
+              $kept = $sectionLines | Where-Object { $_ -notmatch '^\| - \| _No ' }
+              foreach ($l in $kept) { $out.Add($l) }
+            } else {
+              foreach ($l in $sectionLines) { $out.Add($l) }
+            }
+            $sectionLines.Clear()
+          }
+          foreach ($l in $lines) {
+            if ($l -match '^## ') { & $flush; $out.Add($l) } else { $sectionLines.Add($l) }
+          }
+          & $flush
+          $content = $out -join "`r`n"
+          # Strip "Cherry-pick: " prefix from PR titles
+          $content = [regex]::Replace($content, '(?im)(?<=\|\s)(cherry[- ]?pick|cherrypick)\s*:\s*', '')
+          # Escape '#' before work-item IDs inside PR rows so wiki keeps the '#' visible but does NOT auto-link
+          # (e.g. "Bug #81009: ..." stays as "Bug #81009: ..." rendered, but won't become a work-item card; only on lines starting with "| [!")
+          $content = ($content -split "`r?`n" | ForEach-Object {
+            if ($_ -match '^\|\s*\[\!') { $_ -replace '(?<!\\)#(\d{4,7})', '\#$1' } else { $_ }
+          }) -join "`r`n"
+          # Collapse empty-state tables (header + sep + only "| - | _No xxx..._ | - |" row)
+          # to a single italic placeholder line. The $flush pass above already strips the
+          # trailing placeholder row when a section has real data; this handles the
+          # all-placeholder case so empty sections render as one clean italic line.
+          # Idempotent: re-running this regex on an already-collapsed page is a no-op.
+          $emptyRx = [regex]'(?ms)^\|\s\*\*[^\r\n]+\|\s*\r?\n\|[-\s|]+\|\s*\r?\n\|(?:\s-\s\|)+\s_([^_]+)_\s\|(?:[^\r\n|]*\|)*\s*\r?\n'
+          $content = $emptyRx.Replace($content, { param($m) "_" + $m.Groups[1].Value + "_`r`n" })
+          [System.IO.File]::WriteAllText($filePath, $content, $utf8)
+          Write-Host "Cleaned release notes (HTML decoded, placeholder rows pruned, empty tables collapsed, Cherry-pick prefixes stripped, PR-title #ids escaped)."
+
+    - task: richardfennellBM.BM-VSTS-WIKIUpdater-Tasks.WikiUpdaterTask.WikiUpdaterTask@3
+      displayName: 'Publish release notes to project wiki (Hotfix branch)'
+      continueOnError: true
+      inputs:
+        repo: 'https://carlsberggroup@dev.azure.com/carlsberggroup/1760-SmartCore-HUB/_git/1760-SmartCore-HUB.wiki'
+        branch: 'wikiMaster'
+        filename: 'Deployment-release-notes/Hotfix-branch/Build-$(Build.BuildNumber).md'
+        dataIsFile: true
+        sourceFile: '$(Build.ArtifactStagingDirectory)/releaseNotes.md'
+        message: 'Creating wiki'
+        gitname: D365CarlsbergBalkan
+        gitemail: 'D365CarlsbergBalkan@carlsberggroup.com'
+        useAgentToken: true
+        injectExtraHeader: false
+
+    - task: PowerShell@2
+      displayName: 'Sort wiki .order (newest build first)'
+      continueOnError: true
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      inputs:
+        targetType: 'inline'
+        script: |
+          $folder    = 'Deployment-release-notes/Hotfix-branch'
+          $wikiUrl   = 'https://dev.azure.com/carlsberggroup/1760-SmartCore-HUB/_git/1760-SmartCore-HUB.wiki'
+          $work      = Join-Path $env:AGENT_TEMPDIRECTORY "wiki-order-$([guid]::NewGuid())"
+          git -c http.extraheader="Authorization: Bearer $($env:SYSTEM_ACCESSTOKEN)" -c core.longpaths=true clone --depth 1 --branch wikiMaster $wikiUrl $work
+          if ($LASTEXITCODE -ne 0) { Write-Warning "Wiki clone failed"; return }
+          Push-Location $work
+          git config user.email 'D365CarlsbergBalkan@carlsberggroup.com'
+          git config user.name  'D365CarlsbergBalkan'
+          $files = Get-ChildItem (Join-Path $work $folder) -Filter 'Build-*.md' -ErrorAction SilentlyContinue
+          if (-not $files) { Pop-Location; Write-Host "No Build-*.md pages yet in $folder"; return }
+          $sorted = $files | Sort-Object @{Expression = {
+              $name = $_.BaseName -replace '^Build-',''
+              try { [version]$name } catch { [version]'0.0.0.0' }
+            }; Descending = $true}, @{Expression = { $_.BaseName }; Descending = $true}
+          $orderPath = Join-Path $work "$folder/.order"
+          $names = $sorted | ForEach-Object { $_.BaseName }
+          [System.IO.File]::WriteAllLines($orderPath, $names, (New-Object System.Text.UTF8Encoding($false)))
+          git add "$folder/.order"
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { Pop-Location; Write-Host '.order already up-to-date'; return }
+          git commit -m "Sort .order (newest build first) for $folder" | Out-Null
+          git -c http.extraheader="Authorization: Bearer $($env:SYSTEM_ACCESSTOKEN)" push origin wikiMaster
+          Pop-Location
+          Write-Host "Updated .order with $($names.Count) build pages (newest first)."
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: "$(Build.ArtifactStagingDirectory)/releaseNotes.md"
+        ArtifactName: "releaseNotes"
+        publishLocation: "Container"
