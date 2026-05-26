@@ -106,7 +106,7 @@ if (-not $wiqlResp.workItems -or $wiqlResp.workItems.Count -eq 0) {
 
 # --- 3. Batch-fetch work items WITH relations ---
 $ids = $wiqlResp.workItems | ForEach-Object { $_.id }
-$rows = @()
+$candidates = @()
 $batchSize = 200
 for ($i = 0; $i -lt $ids.Count; $i += $batchSize) {
     $chunk = $ids[$i..([Math]::Min($i + $batchSize - 1, $ids.Count - 1))]
@@ -169,41 +169,172 @@ for ($i = 0; $i -lt $ids.Count; $i += $batchSize) {
 
         $wiType  = $wi.fields.'System.WorkItemType'
         $wiTitle = $wi.fields.'System.Title' -replace '\|','\|'
-        $wiState = $wi.fields.'System.State'
         $wiUrl   = "$OrgUrl/$encProj/_workitems/edit/$($wi.id)"
-        $prList  = ($otherRepoPrs | ForEach-Object {
-            # If PR lives in a different project, show project/repo to disambiguate
-            if ($_.ProjectName -ne $Project) {
-                "[$($_.ProjectName)/$($_.RepoName) #$($_.PrId)]($($_.PrUrl))"
-            } else {
-                "[$($_.RepoName) #$($_.PrId)]($($_.PrUrl))"
-            }
-        }) -join '<br>'
-        $rows += "| [$wiType #$($wi.id)]($wiUrl) | $wiTitle | **$wiState** | $prList |"
+        # Pretty PR list: "[SCF #21974](url), [SCF #21983](url)"
+        $prList  = ($otherRepoPrs | Sort-Object PrId -Unique | ForEach-Object {
+            $shortRepo = if ($_.RepoName -match '^\d+-?[Ss]martcore-?[Ff]oundation$') { 'SCF' } else { $_.RepoName }
+            "[$shortRepo #$($_.PrId)]($($_.PrUrl))"
+        }) -join ', '
+        # Title cell suffixed with an italic "fix in" note so the cross-repo PRs are visible
+        # without needing a separate section.
+        $titleCell = "$wiTitle<br>_(fix in $prList)_"
+        $candidates += [pscustomobject]@{
+            Id        = $wi.id
+            Type      = $wiType
+            Url       = $wiUrl
+            TitleCell = $titleCell
+            Fields    = $wi.fields
+        }
     }
 }
 
-if ($rows.Count -eq 0) {
-    Write-Host "No externally-fixed work items found. Skipping section."
+if ($candidates.Count -eq 0) {
+    Write-Host "No externally-fixed work items found. Nothing to merge."
     return
 }
 
-# --- 4. Append section to release notes (before "## Package Versions" if present, else at end) ---
-$utf8 = New-Object System.Text.UTF8Encoding($false)
+# --- 4. Merge candidates into existing sections of the release notes ---------
+# Strategy: each WI is appended into the section that matches its WorkItemType
+# (Bug -> Bugs, Task -> Tasks, etc.). Avoids a separate "Externally-fixed"
+# section -- developers see the SCF/ISV PR right next to the WI in its natural
+# section. If the section currently contains only the italic empty-state line
+# (collapsed by the CI cleanup pass), the table is rebuilt from the per-type
+# schema below.
+
+$utf8    = New-Object System.Text.UTF8Encoding($false)
 $content = [System.IO.File]::ReadAllText($ReleaseNotesPath, $utf8)
 
-$section  = "## Externally-fixed Work Items`r`n`r`n"
-$section += "> HUB work items resolved in this window whose code fix lives OUTSIDE this repo (typically Smartcore Foundation or an ISV). These changes feed into this build via NuGet auto-updates. PR column shows the originating PR when discoverable.`r`n`r`n"
-$section += "| **Work Item** | **Title** | **State** | **Originating PR** |`r`n"
-$section += "|---|---|---|---|`r`n"
-$section += ($rows -join "`r`n") + "`r`n`r`n"
+# Per-type section heading + column schema. Cell builder receives the WI fields
+# hash; returns an ordered array of cell values (ID + Title prepended by render).
+$sectionSpec = @{
+    'Bug' = @{
+        Heading = '## Bugs'
+        Header  = '| **ID** | **Title** | **Severity** | **Priority** | **Originated From** | **Found in environment** |'
+        Sep     = '|--------|-----------|--------------|--------------|---------------------|--------------------------|'
+        Cells   = { param($f) @(
+            ($f.'Microsoft.VSTS.Common.Severity'),
+            ($f.'Microsoft.VSTS.Common.Priority'),
+            ($f.'Custom.OriginatedFrom'),
+            ($f.'Custom.FoundInEnvironment_MicrosoftServices')
+        ) }
+    }
+    'Task' = @{
+        Heading = '## Tasks'
+        Header  = '| **ID** | **Title** | **Area** | **Iteration** | **Tags** |'
+        Sep     = '|--------|-----------|----------|---------------|----------|'
+        Cells   = { param($f) @(
+            ($f.'System.AreaPath' -replace '^[^\\]+\\',''),
+            ($f.'System.IterationPath' -replace '^[^\\]+\\',''),
+            ($f.'System.Tags')
+        ) }
+    }
+    'User Story' = @{
+        Heading = '## User Stories'
+        Header  = '| **ID** | **Title** | **Area** | **Iteration** | **Tags** |'
+        Sep     = '|--------|-----------|----------|---------------|----------|'
+        Cells   = { param($f) @(
+            ($f.'System.AreaPath' -replace '^[^\\]+\\',''),
+            ($f.'System.IterationPath' -replace '^[^\\]+\\',''),
+            ($f.'System.Tags')
+        ) }
+    }
+    'Product Backlog Item' = @{
+        Heading = '## User Stories'
+        Header  = '| **ID** | **Title** | **Area** | **Iteration** | **Tags** |'
+        Sep     = '|--------|-----------|----------|---------------|----------|'
+        Cells   = { param($f) @(
+            ($f.'System.AreaPath' -replace '^[^\\]+\\',''),
+            ($f.'System.IterationPath' -replace '^[^\\]+\\',''),
+            ($f.'System.Tags')
+        ) }
+    }
+    'Document Deliverable' = @{
+        Heading = '## Document Deliverables'
+        Header  = '| **ID** | **Title** | **Area** | **Iteration** | **Tags** |'
+        Sep     = '|--------|-----------|----------|---------------|----------|'
+        Cells   = { param($f) @(
+            ($f.'System.AreaPath' -replace '^[^\\]+\\',''),
+            ($f.'System.IterationPath' -replace '^[^\\]+\\',''),
+            ($f.'System.Tags')
+        ) }
+    }
+}
 
-$pkgPattern = '(?m)^## Package Versions'
-if ($content -match $pkgPattern) {
-    $content = [regex]::Replace($content, $pkgPattern, ($section + '## Package Versions'), 1)
-} else {
-    $content += "`r`n" + $section
+# Group candidates by destination section
+$byHeading = @{}
+$unhandled = @()
+foreach ($c in $candidates) {
+    if ($sectionSpec.ContainsKey($c.Type)) {
+        $spec = $sectionSpec[$c.Type]
+        if (-not $byHeading.ContainsKey($spec.Heading)) { $byHeading[$spec.Heading] = @() }
+        $byHeading[$spec.Heading] += [pscustomobject]@{ Candidate = $c; Spec = $spec }
+    } else {
+        $unhandled += $c
+    }
+}
+
+$mergedCount = 0
+foreach ($heading in $byHeading.Keys) {
+    $entries = $byHeading[$heading]
+    $spec    = $entries[0].Spec
+    # Build the new row strings (skip WIs whose ID is already present in the section to avoid dupes)
+    $rxHeading = [regex]::Escape($heading)
+    if ($content -notmatch "(?ms)^$rxHeading\s*\r?\n") {
+        Write-Host "Section '$heading' not found in release notes -- skipping $($entries.Count) cross-repo WI(s)."
+        $unhandled += ($entries | ForEach-Object { $_.Candidate })
+        continue
+    }
+
+    # Extract the section block (heading to next "## " or EOF)
+    $sectionRx = [regex]"(?ms)(^$rxHeading\s*\r?\n)(.*?)(?=\r?\n## |\z)"
+    $m = $sectionRx.Match($content)
+    if (-not $m.Success) { continue }
+    $sectionBody = $m.Groups[2].Value
+
+    $newRows = @()
+    foreach ($e in $entries) {
+        $c = $e.Candidate
+        # Skip if WI ID already present in this section (avoid duplicate row)
+        if ($sectionBody -match "\[$($c.Id)\]\(") {
+            Write-Host "  WI $($c.Id) already in $heading -- skipping (avoid dupe)."
+            continue
+        }
+        $extraCells = & $spec.Cells $c.Fields
+        $extraStr   = ($extraCells | ForEach-Object { if ($null -ne $_ -and "$_".Trim()) { "$_" } else { '-' } }) -join ' | '
+        $newRows   += "| [$($c.Id)]($($c.Url)) | $($c.TitleCell) | $extraStr |"
+    }
+    if ($newRows.Count -eq 0) { continue }
+
+    # Detect whether section currently has a real table (find separator line) or only the italic placeholder
+    if ($sectionBody -match '(?m)^\|[\s\-:|]+\|\s*$') {
+        # Real table exists -- append rows at end of body (just before the section terminator)
+        $trimmed = $sectionBody.TrimEnd("`r","`n"," ","`t")
+        $newBody = $trimmed + "`r`n" + ($newRows -join "`r`n") + "`r`n`r`n"
+    } else {
+        # Section is the collapsed italic placeholder -- rebuild as a fresh table
+        $newBody = "`r`n" + $spec.Header + "`r`n" + $spec.Sep + "`r`n" + ($newRows -join "`r`n") + "`r`n`r`n"
+    }
+    $content = $content.Substring(0,$m.Index) + $m.Groups[1].Value + $newBody + $content.Substring($m.Index + $m.Length)
+    $mergedCount += $newRows.Count
+    Write-Host "Merged $($newRows.Count) cross-repo WI(s) into '$heading'."
+}
+
+# Catch-all section for any unhandled WI types (Feature, Epic, Issue, etc.)
+if ($unhandled.Count -gt 0) {
+    $fallbackRows = $unhandled | ForEach-Object {
+        "| [$($_.Type) #$($_.Id)]($($_.Url)) | $($_.TitleCell) |"
+    }
+    $fb  = "`r`n## Externally-fixed Work Items (other types)`r`n`r`n"
+    $fb += "| **Work Item** | **Title** |`r`n|---|---|`r`n"
+    $fb += ($fallbackRows -join "`r`n") + "`r`n`r`n"
+    $pkgPattern = '(?m)^## Package Versions'
+    if ($content -match $pkgPattern) {
+        $content = [regex]::Replace($content, $pkgPattern, ($fb + '## Package Versions'), 1)
+    } else {
+        $content += $fb
+    }
+    Write-Host "Added fallback section with $($unhandled.Count) other-type WI(s)."
 }
 
 [System.IO.File]::WriteAllText($ReleaseNotesPath, $content, $utf8)
-Write-Host "Added Externally-fixed Work Items section with $($rows.Count) row(s)."
+Write-Host "Cross-repo merge complete: $mergedCount inline row(s) merged into typed sections."
