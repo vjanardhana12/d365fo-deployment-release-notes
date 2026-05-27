@@ -124,44 +124,26 @@ $BlockStart  = '<!-- ENV-PROGRESS-START -->'
 $BlockEnd    = '<!-- ENV-PROGRESS-END -->'
 $Placeholder = '<!-- ENV-PROGRESS-BLOCK -->'
 
-# Environment name -> D365 URL slug
+# Environment name -> D365 URL resolution
 #
-# URL resolution order (per env, looked up by name in Get-EnvUrl below):
-#   1. ADO variable group `LCSEnvironmentsURL` (linked to this release definition).
-#      Variables are exposed as env vars matching their group name (lowercase by
-#      convention), with a FULL URL value, e.g.
-#        custtest    = https://cbhub-custtest.sandbox.operations.eu.dynamics.com/
-#        regression  = https://cbhub-regression.sandbox.operations.eu.dynamics.com/
-#      Adding a new LCS env is therefore a Library-only change (no code edit).
-#   2. Hardcoded $EnvUrlMap fallback below -- kept so existing/legacy stages keep
-#      rendering correctly if the variable group is unavailable (e.g. running the
-#      script locally for diagnostics, or a stage runs before the group is linked).
-$script:EnvUrlMap = @{
-    'DEV'         = 'cbhub-devtest'
-    'DEVTEST'     = 'cbhub-devtest'
-    'SIT'         = 'cbhub-sit-e2e'
-    'SIT-E2E'     = 'cbhub-sit-e2e'
-    'UAT'         = 'cbhub-uat'
-    'CONSTEST'    = 'cbhub-constest'
-    'DATAMIG'     = 'cbhub-datamigration'
-    'DATAMIGRATION' = 'cbhub-datamigration'
-    'PROCESSTEST' = 'cbhub-processtest'
-    'CUSTEST'     = 'cbhub-custest'      # legacy single-t alias
-    'CUSTTEST'    = 'cbhub-custtest'     # current env in release pipeline (CustTest)
-    'GOLDCONFIG'  = 'cbhub-goldconfig'
-    'GOLDENCONFIG'= 'cbhub-goldconfig'
-    'TRAIN'       = 'cbhub-train'
-    'TRAINING'    = 'cbhub-train'
-    'PREPROD'     = 'cbhub-preprod'
-    'PROD'        = 'cbhub'
-}
-$script:EnvUrlBase = 'sandbox.operations.eu.dynamics.com'
+# URLs come EXCLUSIVELY from the `LCSEnvironmentsURL` variable group linked to
+# the release definition. Each variable is exposed as a process env var; its
+# name must match the release stage name (case-insensitive, alphanumerics only).
+#
+# Examples (variable in `LCSEnvironmentsURL`):
+#   custtest        = https://cbhub-custtest.sandbox.operations.eu.dynamics.com/
+#   datamigration   = https://cbhub-datamigration.sandbox.operations.eu.dynamics.com/
+#   goldconfig      = https://cbhub-goldconfig.sandbox.operations.eu.dynamics.com/
+#   regression      = https://cbhub-regression.sandbox.operations.eu.dynamics.com/
+#
+# Adding a new env is therefore a Library-only change (no code edit).
+# If a stage has no matching variable, its name renders as plain text (no link).
 
 function Get-EnvUrl {
     param([string]$EnvName)
     if (-not $EnvName) { return $null }
-    # 1. Variable group: var names match common env keys (lowercase preferred).
-    #    Try a few common spellings so renames in the release stage don't break URLs.
+    # Try a few common spellings of the variable name so minor casing/punctuation
+    # mismatches between stage names and var-group keys don't drop the link.
     $candidates = @(
         $EnvName.ToLower(),
         ($EnvName.ToLower() -replace '[^a-z0-9]', ''),  # e.g. "Sit-E2E" -> "site2e"
@@ -171,9 +153,6 @@ function Get-EnvUrl {
         $val = [Environment]::GetEnvironmentVariable($key)
         if ($val -and $val -match '^https?://') { return ($val.TrimEnd('/') + '/') }
     }
-    # 2. Hardcoded fallback (slug + shared base domain).
-    $slug = $script:EnvUrlMap[$EnvName.ToUpper()]
-    if ($slug) { return "https://$slug.$($script:EnvUrlBase)/" }
     return $null
 }
 
