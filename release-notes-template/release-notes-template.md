@@ -54,14 +54,14 @@
 
 ## Bugs
 
-| **ID** | **Title** | **Severity** | **Priority** | **Originated From** | **Found in environment** |
-|--------|-----------|--------------|--------------|---------------------|--------------------------|
+| **ID** | **Title** | **Severity** | **Priority** | **Originated From** | **Found in environment** | **How Found** | **Root Cause** |
+|--------|-----------|--------------|--------------|---------------------|--------------------------|---------------|----------------|
 {{#forEach this.workItems}}
 {{#if (eq (lookup this.fields 'System.WorkItemType') 'Bug')}}
-| [{{this.id}}]({{replace this.url "_apis/wit/workItems" "_workitems/edit"}}) | {{lookup this.fields 'System.Title'}} | {{lookup this.fields 'Microsoft.VSTS.Common.Severity'}} | {{lookup this.fields 'Microsoft.VSTS.Common.Priority'}} | {{lookup this.fields 'Custom.OriginatedFrom'}} | {{lookup this.fields 'Custom.FoundInEnvironment_MicrosoftServices'}} |
+| [{{this.id}}]({{replace this.url "_apis/wit/workItems" "_workitems/edit"}}) | {{lookup this.fields 'System.Title'}} | {{lookup this.fields 'Microsoft.VSTS.Common.Severity'}} | {{lookup this.fields 'Microsoft.VSTS.Common.Priority'}} | {{lookup this.fields 'Custom.OriginatedFrom'}} | {{lookup this.fields 'Custom.FoundInEnvironment_MicrosoftServices'}} | {{lookup this.fields 'Custom.HowFoundCategory_MicrosoftServices'}} | {{lookup this.fields 'Custom.RootCauseNotes'}} |
 {{/if}}
 {{/forEach}}
-| - | _No bugs linked to this build._ | - | - | - | - |
+| - | _No bugs linked to this build._ | - | - | - | - | - | - |
 
 ## Configuration Deliverables
 
@@ -92,14 +92,16 @@
 
 ## Pull Requests _(MS internal)_ - **{{pullRequests.length}} merged**
 
-| **ID** | **Title** | **Raised by** | **Source** | **Target** | **Merged on** | **Approved by** |
-|--------|-----------|---------------|------------|------------|---------------|-----------------|
+_Source/Target branches omitted: source user-branches are deleted on merge; target is always this build's branch._
+
+| **ID** | **Title** | **Raised by** | **Merged on** | **Approved by** |
+|--------|-----------|---------------|---------------|-----------------|
 {{#if pullRequests.length}}
 {{#forEach pullRequests}}
-| [!{{this.pullRequestId}}]({{replace (replace this.url "_apis/git/repositories" "_git") "pullRequests" "pullRequest"}}) | {{this.title}} | {{this.createdBy.displayName}} | `{{replace this.sourceRefName "refs/heads/" ""}}` | `{{replace this.targetRefName "refs/heads/" ""}}` | {{this.closedDate}} | {{#if this.reviewers}}{{#forEach this.reviewers}}{{#if this.isContainer}}{{#if this.votedFor}}{{#forEach this.votedFor}}{{#if (eq this.vote 10)}}{{this.displayName}} 🟢 {{/if}}{{#if (eq this.vote 5)}}{{this.displayName}} ✓ {{/if}}{{/forEach}}{{/if}}{{else}}{{#if (eq this.vote 10)}}{{this.displayName}} 🟢 {{/if}}{{#if (eq this.vote 5)}}{{this.displayName}} ✓ {{/if}}{{/if}}{{/forEach}}{{else}}_No approvers_{{/if}} |
+| [!{{this.pullRequestId}}]({{replace (replace this.url "_apis/git/repositories" "_git") "pullRequests" "pullRequest"}}) | {{this.title}} | {{this.createdBy.displayName}} | {{this.closedDate}} | {{#if this.reviewers}}{{#forEach this.reviewers}}{{#if this.isContainer}}{{#if this.votedFor}}{{#forEach this.votedFor}}{{#if (eq this.vote 10)}}{{this.displayName}} 🟢 {{/if}}{{#if (eq this.vote 5)}}{{this.displayName}} ✓ {{/if}}{{/forEach}}{{/if}}{{else}}{{#if (eq this.vote 10)}}{{this.displayName}} 🟢 {{/if}}{{#if (eq this.vote 5)}}{{this.displayName}} ✓ {{/if}}{{/if}}{{/forEach}}{{else}}_No approvers_{{/if}} |
 {{/forEach}}
 {{else}}
-| - | _No pull requests associated with this build._ | - | - | - | - | - |
+| - | _No pull requests associated with this build._ | - | - | - |
 {{/if}}
 
 **Reviewer legend**: 🟢 Approved · ✓ Approved with suggestions

@@ -81,11 +81,11 @@ Tip: open this file as raw markdown to see the source, or open it in a wiki/mark
 
 ## Bugs
 
-| **ID** | **Title** | **Severity** | **Priority** | **State** |
-|--------|-----------|--------------|--------------|-----------|
-| [82148](https://dev.azure.com/contoso/MyProject/_workitems/edit/82148) | Sales order confirmation fails for project-funded orders | 1 - Critical | 1 | Resolved |
-| [82369](https://dev.azure.com/contoso/MyProject/_workitems/edit/82369) | Vendor invoice posting rounding error on multi-currency | 2 - High | 2 | Resolved |
-| [81855](https://dev.azure.com/contoso/MyProject/_workitems/edit/81855) | Inventory adjustment report shows duplicate lines | 3 - Medium | 3 | Resolved |
+| **ID** | **Title** | **Severity** | **Priority** | **Originated From** | **Found in environment** | **How Found** | **Root Cause** |
+|--------|-----------|--------------|--------------|---------------------|--------------------------|---------------|----------------|
+| [82148](https://dev.azure.com/contoso/MyProject/_workitems/edit/82148) | Sales order confirmation fails for project-funded orders | 1 - Critical | 1 | Customer | UAT | UAT scenario testing | Race condition in `SalesFormLetter.run()` |
+| [82369](https://dev.azure.com/contoso/MyProject/_workitems/edit/82369) | Vendor invoice posting rounding error on multi-currency | 2 - High | 2 | Internal | DevTest | Unit test | `Currency::amountCur2MST` used bank rate instead of accounting rate |
+| [81855](https://dev.azure.com/contoso/MyProject/_workitems/edit/81855) | Inventory adjustment report shows duplicate lines | 3 - Medium | 3 | Internal | DevTest | Code review |  |
 
 ## Configuration Deliverables
 
@@ -128,13 +128,15 @@ Tip: open this file as raw markdown to see the source, or open it in a wiki/mark
 
 ## Pull Requests - **5 merged**
 
-| **ID** | **Title** | **Raised by** | **Source** | **Target** | **Merged on** | **Approved by** |
-|--------|-----------|---------------|------------|------------|---------------|-----------------|
-| [!21847](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21847) | Add Number Sequences detection to Post-Deployment Actions | Jane Doe | `feature/numseq-detection` | `main` | 2026-05-23T08:14:00Z | John Smith 🟢 |
-| [!21845](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21845) | Fix sales order confirmation for project-funded orders | Aaron Lee _(cherry-picked by Jane Doe)_ | `bugfix/82148` | `main` | 2026-05-23T07:42:00Z | John Smith 🟢 Maria Garcia ✓ |
-| [!21843](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21843) | Add PurchReqWorkflow with approval matrix | Aaron Lee | `feature/purchreq-workflow` | `main` | 2026-05-23T05:11:00Z | Maria Garcia 🟢 |
-| [!21841](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21841) | Create SalesIntercoNumSeq scope + reference | Priya Nair | `feature/interco-numseq` | `main` | 2026-05-22T18:22:00Z | John Smith 🟢 |
-| [!21839](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21839) | Fix multi-currency rounding in `Currency::amountCur2MST` | Priya Nair | `bugfix/82369` | `main` | 2026-05-22T15:05:00Z | Aaron Lee 🟢 Maria Garcia ✓ |
+_Source/Target branches omitted: source user-branches are deleted on merge; target is always this build's branch._
+
+| **ID** | **Title** | **Raised by** | **Merged on** | **Approved by** |
+|--------|-----------|---------------|---------------|-----------------|
+| [!21847](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21847) | Add Number Sequences detection to Post-Deployment Actions | Jane Doe | 2026-05-23T08:14:00Z | John Smith 🟢 |
+| [!21845](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21845) | Fix sales order confirmation for project-funded orders | Aaron Lee _(cherry-picked by Jane Doe)_ | 2026-05-23T07:42:00Z | John Smith 🟢 Maria Garcia ✓ |
+| [!21843](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21843) | Add PurchReqWorkflow with approval matrix | Aaron Lee | 2026-05-23T05:11:00Z | Maria Garcia 🟢 |
+| [!21841](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21841) | Create SalesIntercoNumSeq scope + reference | Priya Nair | 2026-05-22T18:22:00Z | John Smith 🟢 |
+| [!21839](https://dev.azure.com/contoso/MyProject/_git/MyApp/pullRequest/21839) | Fix multi-currency rounding in `Currency::amountCur2MST` | Priya Nair | 2026-05-22T15:05:00Z | Aaron Lee 🟢 Maria Garcia ✓ |
 
 **Reviewer legend**: 🟢 Approved · ✓ Approved with suggestions
 

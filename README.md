@@ -45,7 +45,8 @@ Each deployment stage re-runs the script and refreshes the strip with current RE
   - Plus a *New objects introduced* counts summary
 - **User Stories / Tasks / Bugs / Document Deliverables / Configuration Deliverables** — tables from ADO work items linked to the build
 - **Bugs** — auto-sorted by Severity then Priority (S1 rows first)
-- **Pull Requests** — who raised, source/target branch, who approved (🟢 / ✓); cherry-picked PRs are re-attributed to the original author
+- **Pull Requests** — who raised, when merged, who approved (🟢 / ✓); cherry-picked PRs are re-attributed to the original author
+- **Bugs** — auto-sorted by Severity then Priority (S1 rows first), with **How Found** and **Root Cause** columns
 - **Package Versions** — all NuGet packages (Platform / Foundation / ISV) from `packages.config`
 - **Data Migration · Test Notes · Known Issues · Rollback Plan · Notes** — section-of-record placeholders (always rendered; show `_No xxx linked_` italic line when empty)
 
@@ -152,8 +153,10 @@ On **every release stage** (DevTest, UAT, PROD, …) add a single PowerShell tas
 
 Sample **Arguments** (one line, all on the PS task input):
 ```powershell
--Environment "$(Release.EnvironmentName)" -WikiRepoUrlBase "https://dev.azure.com/yourorg/YourProject/_git/YourProject.wiki" -RepoName "YourSourceRepo" -EnvUrlMapJson '{"DEV":"https://yourenv-dev.sandbox.operations.eu.dynamics.com/","UAT":"https://yourenv-uat.sandbox.operations.eu.dynamics.com/","PROD":"https://yourenv.operations.dynamics.com/"}' -CreateTag $true
+-Environment "$(Release.EnvironmentName)" -WikiRepoUrlBase "https://dev.azure.com/yourorg/YourProject/_git/YourProject.wiki" -RepoName "YourSourceRepo" -CreateTag $true
 ```
+
+> **Environment URLs** for the deployment-status strip are read from a Library variable group named `LCSEnvironmentsURL`. Create that group with one variable per stage (lowercase, alphanumerics only — e.g. `devtest`, `uat`, `prod`) whose value is the LCS environment URL, then link it to your release definition. Adding a new environment is a Library-only change — no code edit needed. If a stage has no matching variable, its name renders as plain text (no link).
 
 > **Enable OAuth token** on the agent job (same as Step 5).
 > Add the script as a **continueOnError** task so wiki failures never block deployment (the script itself is also trap-guarded).
@@ -177,7 +180,6 @@ Sample **Arguments** (one line, all on the PS task input):
 | `-WikiBranch` | `wikiMaster` | Default wiki branch (don't change unless customized). |
 | `-TargetDir` | `$(System.DefaultWorkingDirectory)\wiki` | Local clone directory. |
 | `-Token` | `$env:SYSTEM_ACCESSTOKEN` | OAuth token. |
-| `-EnvUrlMapJson` | `''` | JSON map of stage name → environment URL. Makes strip entries clickable. |
 | `-CreateTag` | `$false` | Auto-tag the build commit when stage matches `TagTriggerJson`. |
 | `-TagTriggerJson` | `'{"release":"UAT","prod":"PROD"}'` | Which branch/stage combos create tags. |
 | `-GitUserEmail` | `ado-pipeline@noreply.local` | Email used for the tag commits. |
@@ -271,7 +273,7 @@ Leave `-CreateTag $false` (default). The Tag cell will simply stay `_Pending_`.
 |---|---|
 | `TF401027: You need GenericContribute permission` on first wiki push | Run `setup/Grant-BuildPermission.ps1` (Step 4). |
 | `Wiki file not found: Build-<n>.md` in the release task | Build stage didn't publish — check the `WikiUpdaterTask` step output in the build, and confirm `branchFolder` matches the source branch. |
-| Strip entries not clickable | `EnvUrlMapJson` keys are case-insensitive but must match the **stage name** in the release pipeline (e.g. `DEV`, not `DevTest`). |
+| Strip entries not clickable | Variable in the `LCSEnvironmentsURL` Library group is missing for that stage. Variable name must match the release **stage name** lowercased with non-alphanumerics stripped (e.g. stage `DevTest` → variable `devtest`). |
 | Compare cell stays `_Pending_` | First build on the branch — no prior build to compare to. Or `RepoName` not passed. |
 | Tag cell stays `_Pending_` | `-CreateTag $true` not passed, or current stage doesn't match `TagTriggerJson`, or repository has no prior `v*.*.*` tag for SemVer bump (will seed `v1.0.0`). |
 | Post-Deployment Actions section missing | First build (no prev SHA) or no relevant `Ax*` changes between the two SHAs. |
